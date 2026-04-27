@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-export default function PortTable({ rows }) {
+export default function PortTable({ rows, appliedLimits = {} }) {
   const [filter, setFilter] = useState("all")
   const filtered = filter === "all" ? rows : rows.filter(r => String(r.dpid) === filter)
 
@@ -40,8 +40,17 @@ export default function PortTable({ rows }) {
             const rx  = ((r.avg_rx  || 0) / 1e6).toFixed(2)
             const tx  = ((r.avg_tx  || 0) / 1e6).toFixed(2)
             const pk  = ((r.peak    || 0) / 1e6).toFixed(2)
-            const pct = Math.min(((r.avg_rx || 0) + (r.avg_tx || 0)) / (50e6) * 100, 100)
+            const capacityMbps = Number(r.capacity_mbps) > 0 ? Number(r.capacity_mbps) : 50
+            const pctRaw = Number.isFinite(Number(r.utilization_pct))
+              ? Number(r.utilization_pct)
+              : (((r.avg_rx || 0) + (r.avg_tx || 0)) / (capacityMbps * 1e6) * 100)
+            const pct = Math.min(pctRaw, 100)
             const col = pct >= 80 ? "var(--red)" : pct >= 50 ? "var(--yellow)" : "var(--blue)"
+            const limitMbps = appliedLimits[`${r.dpid}-${r.port_no}`]
+            const limitPct = Number.isFinite(limitMbps)
+              ? Math.min((limitMbps / capacityMbps) * 100, 100)
+              : null
+            const limitText = limitPct === null ? "None" : `${limitPct.toFixed(1)}%`
             return (
               <tr key={`${r.dpid}-${r.port_no}`}>
                 <td className="mono bold">s{r.dpid}</td>
@@ -54,8 +63,8 @@ export default function PortTable({ rows }) {
                     <div className="pct-bar">
                       <div className="pct-fill" style={{ width: `${pct}%`, background: col }} />
                     </div>
-                    <span className="mono" style={{ color: col, minWidth: 36, fontSize: 10 }}>
-                      {pct.toFixed(0)}%
+                    <span className="mono" style={{ color: col, minWidth: 118, fontSize: 10 }}>
+                      {pct.toFixed(0)}% · {limitText}
                     </span>
                   </div>
                 </td>

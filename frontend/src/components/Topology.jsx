@@ -1,18 +1,18 @@
 import { useState } from "react"
 
 const HOST_INFO = {
-  h1:  { ip:"10.0.0.1",  mac:"00:00:00:00:00:01", sw:"s1", port:"eth2" },
-  h2:  { ip:"10.0.0.2",  mac:"00:00:00:00:00:02", sw:"s1", port:"eth3" },
-  h3:  { ip:"10.0.0.3",  mac:"00:00:00:00:00:03", sw:"s1", port:"eth4" },
-  h4:  { ip:"10.0.0.4",  mac:"00:00:00:00:00:04", sw:"s1", port:"eth5" },
+  h1:  { ip:"10.0.0.1",  mac:"00:00:00:00:00:01", sw:"s1", port:"eth3" },
+  h2:  { ip:"10.0.0.2",  mac:"00:00:00:00:00:02", sw:"s1", port:"eth4" },
+  h3:  { ip:"10.0.0.3",  mac:"00:00:00:00:00:03", sw:"s1", port:"eth5" },
+  h4:  { ip:"10.0.0.4",  mac:"00:00:00:00:00:04", sw:"s1", port:"eth6" },
   h5:  { ip:"10.0.0.5",  mac:"00:00:00:00:00:05", sw:"s2", port:"eth3" },
   h6:  { ip:"10.0.0.6",  mac:"00:00:00:00:00:06", sw:"s2", port:"eth4" },
   h7:  { ip:"10.0.0.7",  mac:"00:00:00:00:00:07", sw:"s2", port:"eth5" },
   h8:  { ip:"10.0.0.8",  mac:"00:00:00:00:00:08", sw:"s2", port:"eth6" },
-  h9:  { ip:"10.0.0.9",  mac:"00:00:00:00:00:09", sw:"s3", port:"eth2" },
-  h10: { ip:"10.0.0.10", mac:"00:00:00:00:00:0a", sw:"s3", port:"eth3" },
-  h11: { ip:"10.0.0.11", mac:"00:00:00:00:00:0b", sw:"s3", port:"eth4" },
-  h12: { ip:"10.0.0.12", mac:"00:00:00:00:00:0c", sw:"s3", port:"eth5" },
+  h9:  { ip:"10.0.0.9",  mac:"00:00:00:00:00:09", sw:"s3", port:"eth3" },
+  h10: { ip:"10.0.0.10", mac:"00:00:00:00:00:0a", sw:"s3", port:"eth4" },
+  h11: { ip:"10.0.0.11", mac:"00:00:00:00:00:0b", sw:"s3", port:"eth5" },
+  h12: { ip:"10.0.0.12", mac:"00:00:00:00:00:0c", sw:"s3", port:"eth6" },
 }
 
 function linkColor(utilPct) {
@@ -28,26 +28,47 @@ function linkWidth(utilPct) {
 export default function Topology({ portStats }) {
   const [selected, setSelected] = useState(null)
 
-  // Tính utilization cho từng switch (tổng avg tất cả ports)
-  const swUtil = {}
-  for (const r of portStats) {
-    if (!swUtil[r.dpid]) swUtil[r.dpid] = 0
-    swUtil[r.dpid] += ((r.avg_rx||0) + (r.avg_tx||0)) / (50e6) * 100
+  function rowFor(dpid, portNo) {
+    return portStats.find(r => Number(r.dpid) === dpid && Number(r.port_no) === portNo)
   }
 
-  // Uplink giữa s1-s2: lấy port 1 của s2 (port kết nối về s1)
-  const s1Ports = portStats.filter(r => r.dpid===1)
-  const s2Ports = portStats.filter(r => r.dpid===2)
-  const s3Ports = portStats.filter(r => r.dpid===3)
-  const uplinkPct12 = s2Ports[0] ? ((s2Ports[0].avg_rx||0)+(s2Ports[0].avg_tx||0))/(50e6)*100 : 0
-  const uplinkPct23 = s3Ports[0] ? ((s3Ports[0].avg_rx||0)+(s3Ports[0].avg_tx||0))/(50e6)*100 : 0
+  function rowCapacityMbps(row) {
+    const cap = Number(row?.capacity_mbps)
+    return Number.isFinite(cap) && cap > 0 ? cap : 50
+  }
+
+  function rowUtilPct(row) {
+    if (!row) return 0
+    const util = Number(row.utilization_pct)
+    if (Number.isFinite(util)) return util
+    const cap = rowCapacityMbps(row)
+    return (((row.avg_rx || 0) + (row.avg_tx || 0)) / (cap * 1e6)) * 100
+  }
+
+  // Utilization tổng hợp theo switch = total throughput / total capacity của switch.
+  const swUtil = {}
+  for (const swId of [1, 2, 3]) {
+    const rows = portStats.filter(r => Number(r.dpid) === swId)
+    const totalBps = rows.reduce((sum, r) => sum + (r.avg_rx || 0) + (r.avg_tx || 0), 0)
+    const totalCapacityMbps = rows.reduce((sum, r) => sum + rowCapacityMbps(r), 0)
+    swUtil[swId] = totalCapacityMbps > 0 ? (totalBps / (totalCapacityMbps * 1e6)) * 100 : 0
+  }
+
+  // Utilization uplink tính theo trung bình 2 đầu link.
+  const uplinkPct12 = (rowUtilPct(rowFor(1, 1)) + rowUtilPct(rowFor(2, 1))) / 2
+  const uplinkPct23 = (rowUtilPct(rowFor(2, 2)) + rowUtilPct(rowFor(3, 1))) / 2
+  const uplinkPct13 = (rowUtilPct(rowFor(1, 2)) + rowUtilPct(rowFor(3, 2))) / 2
 
   function selectSwitch(id) {
     const ports = portStats.filter(r => r.dpid===id)
+    const totalBps = ports.reduce((sum, r) => sum + (r.avg_rx || 0) + (r.avg_tx || 0), 0)
+    const totalCapacityMbps = ports.reduce((sum, r) => sum + rowCapacityMbps(r), 0)
     setSelected({
       type: "switch", id,
       ports,
-      total: ports.reduce((a,r)=>(a+(r.avg_rx||0)+(r.avg_tx||0)),0),
+      total_bps: totalBps,
+      total_capacity_mbps: totalCapacityMbps,
+      util_pct: totalCapacityMbps > 0 ? (totalBps / (totalCapacityMbps * 1e6)) * 100 : 0,
     })
   }
   function selectHost(name) {
@@ -73,23 +94,32 @@ export default function Topology({ portStats }) {
           </g>
 
           {/* Controller → switches (dashed) */}
-          {[100, 260, 420].map((x,i) => (
+          {[70, 230, 390].map((x,i) => (
             <line key={i} x1="260" y1="40" x2={x} y2="95"
               stroke="#c5d6f8" strokeWidth="1.5" strokeDasharray="4 3"/>
           ))}
 
           {/* Uplink s1—s2 */}
-          <line x1="100" y1="118" x2="245" y2="118"
+          <line x1="70" y1="118" x2="230" y2="118"
             stroke={linkColor(uplinkPct12)} strokeWidth={linkWidth(uplinkPct12)}/>
-          <text x="172" y="113" textAnchor="middle" fontFamily="DM Mono" fontSize="9" fill="#9ca3af">
+          <text x="150" y="113" textAnchor="middle" fontFamily="DM Mono" fontSize="9" fill="#9ca3af">
             {uplinkPct12.toFixed(0)}%
           </text>
 
           {/* Uplink s2—s3 */}
-          <line x1="275" y1="118" x2="415" y2="118"
+          <line x1="230" y1="118" x2="390" y2="118"
             stroke={linkColor(uplinkPct23)} strokeWidth={linkWidth(uplinkPct23)}/>
-          <text x="345" y="113" textAnchor="middle" fontFamily="DM Mono" fontSize="9" fill="#9ca3af">
+          <text x="310" y="113" textAnchor="middle" fontFamily="DM Mono" fontSize="9" fill="#9ca3af">
             {uplinkPct23.toFixed(0)}%
+          </text>
+
+          {/* Uplink s1—s3 (alternate path) */}
+          <path d="M70 102 Q230 58 390 102"
+            fill="none"
+            stroke={linkColor(uplinkPct13)}
+            strokeWidth={linkWidth(uplinkPct13)} />
+          <text x="230" y="53" textAnchor="middle" fontFamily="DM Mono" fontSize="9" fill="#9ca3af">
+            {uplinkPct13.toFixed(0)}%
           </text>
 
           {/* Switches */}
@@ -153,21 +183,27 @@ export default function Topology({ portStats }) {
               <div className="port-info-title">Switch s{selected.id} — {selected.ports.length} ports</div>
               <div className="text-muted" style={{ fontSize:12, marginBottom:8 }}>
                 Tổng BW: <strong style={{ color:"var(--blue)" }}>
-                  {(selected.total/1e6/2).toFixed(1)} Mbps avg
+                  {(selected.total_bps / 1e6).toFixed(1)} Mbps
                 </strong>
+                {" · "}
+                Util tổng: <strong style={{ color:"var(--blue)" }}>{selected.util_pct.toFixed(1)}%</strong>
+                {" · "}
+                Capacity: <strong>{selected.total_capacity_mbps.toFixed(0)} Mbps</strong>
               </div>
               <table style={{ fontSize:11 }}>
                 <thead><tr>
-                  <th>Port</th><th>RX Mbps</th><th>TX Mbps</th><th>Util%</th>
+                  <th>Port</th><th>RX Mbps</th><th>TX Mbps</th><th>Capacity</th><th>Util%</th>
                 </tr></thead>
                 <tbody>
                   {selected.ports.map(r => {
-                    const pct = ((r.avg_rx||0)+(r.avg_tx||0))/(50e6)*100
+                    const cap = rowCapacityMbps(r)
+                    const pct = rowUtilPct(r)
                     return (
                       <tr key={r.port_no}>
                         <td className="mono bold">eth{r.port_no}</td>
                         <td style={{ color:"var(--blue)" }}>{((r.avg_rx||0)/1e6).toFixed(2)}</td>
                         <td style={{ color:"var(--purple)" }}>{((r.avg_tx||0)/1e6).toFixed(2)}</td>
+                        <td className="mono">{cap.toFixed(0)}M</td>
                         <td style={{ color: pct>=80?"var(--red)":pct>=30?"var(--yellow)":"inherit" }}>
                           {pct.toFixed(1)}%
                         </td>

@@ -18,14 +18,20 @@ from mininet.link import TCLink
 
 class SDNTopo(Topo):
     def build(self):
-        # 3 switches kết nối thành chuỗi: s1 — s2 — s3
-        s1 = self.addSwitch('s1', protocols='OpenFlow13')
-        s2 = self.addSwitch('s2', protocols='OpenFlow13')
-        s3 = self.addSwitch('s3', protocols='OpenFlow13')
+        # 3 switches dạng tam giác để có đường dự phòng:
+        # s1-s2, s2-s3 và s1-s3
+        # Bật STP để giảm nguy cơ loop broadcast trong topology có chu trình.
+        s1 = self.addSwitch('s1', protocols='OpenFlow13', stp=True)
+        s2 = self.addSwitch('s2', protocols='OpenFlow13', stp=True)
+        s3 = self.addSwitch('s3', protocols='OpenFlow13', stp=True)
 
-        # Uplink giữa các switch: 100 Mbps
-        self.addLink(s1, s2, bw=100, delay='2ms')
-        self.addLink(s2, s3, bw=100, delay='2ms')
+        # Uplink giữa các switch: 100 Mbps (gán port cố định để backend/frontend map ổn định)
+        # s1-eth1 <-> s2-eth1
+        self.addLink(s1, s2, port1=1, port2=1, bw=100, delay='2ms')
+        # s2-eth2 <-> s3-eth1
+        self.addLink(s2, s3, port1=2, port2=1, bw=100, delay='2ms')
+        # s1-eth2 <-> s3-eth2 (alternate path)
+        self.addLink(s1, s3, port1=2, port2=2, bw=100, delay='3ms')
 
         # 4 host mỗi switch, băng thông 50 Mbps mỗi link
         host_switch_map = [

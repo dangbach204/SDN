@@ -1,14 +1,3 @@
-"""
-monitor.py — Ryu app
-Chạy: ryu-manager ryu/monitor.py ryu.app.ofctl_rest --ofp-tcp-listen-port 6653
-
-Thay đổi so với bản cũ:
-  1. Bỏ Ryu WSGI / MonitorAPI — FastAPI là backend riêng
-  2. Sửa duplicate hub.spawn(_monitor_loop)
-  3. Ghi dữ liệu lên FastAPI (POST /internal/...) thay vì SQLite
-  4. POLL_INTERVAL = 60s theo yêu cầu (có thể đổi lại 10s khi test)
-"""
-
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls

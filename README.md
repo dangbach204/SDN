@@ -128,7 +128,7 @@ Trong Mininet CLI:
 
 ```
 mininet> h1 iperf -s &
-mininet> h2 iperf -c 10.0.0.1 -b 30M -t 60
+mininet> h2 iperf -c 10.0.0.1 -u -b 30M -t 60
 mininet> h3 ping 10.0.0.4 -i 0.1
 ```
 

@@ -183,6 +183,111 @@ async def init_db():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS action_verifications (
+                id BIGSERIAL PRIMARY KEY,
+                recommendation_id BIGINT NOT NULL,
+                dpid BIGINT NOT NULL,
+                port_no INTEGER NOT NULL,
+                action_id TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                param_mbps DOUBLE PRECISION NOT NULL DEFAULT 0,
+                executed_ok BOOLEAN NOT NULL,
+                verified_ok BOOLEAN NOT NULL,
+                execution_message TEXT NOT NULL,
+                verification_message TEXT NOT NULL,
+                before_mbps DOUBLE PRECISION,
+                after_mbps DOUBLE PRECISION,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                FOREIGN KEY (recommendation_id) REFERENCES recommendations(id) ON DELETE CASCADE
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_action_verifications_rec
+                ON action_verifications(recommendation_id, created_at DESC)
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS control_cycles (
+                id BIGSERIAL PRIMARY KEY,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ended_at TIMESTAMPTZ,
+                status TEXT NOT NULL DEFAULT 'running',
+                congested_links INTEGER NOT NULL DEFAULT 0,
+                anomalies INTEGER NOT NULL DEFAULT 0,
+                actions_planned INTEGER NOT NULL DEFAULT 0,
+                actions_applied INTEGER NOT NULL DEFAULT 0,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_control_cycles_started
+                ON control_cycles(started_at DESC)
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS control_actions (
+                id BIGSERIAL PRIMARY KEY,
+                cycle_id BIGINT,
+                dpid BIGINT NOT NULL,
+                port_no INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_param DOUBLE PRECISION NOT NULL DEFAULT 0,
+                confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+                score DOUBLE PRECISION,
+                decision TEXT NOT NULL DEFAULT 'pending',
+                execution_ok BOOLEAN NOT NULL DEFAULT FALSE,
+                verification_ok BOOLEAN NOT NULL DEFAULT FALSE,
+                rollback_performed BOOLEAN NOT NULL DEFAULT FALSE,
+                execution_message TEXT NOT NULL DEFAULT '',
+                verification_message TEXT NOT NULL DEFAULT '',
+                rollback_message TEXT,
+                before_kpi JSONB NOT NULL DEFAULT '{}'::jsonb,
+                after_kpi JSONB,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                FOREIGN KEY (cycle_id) REFERENCES control_cycles(id) ON DELETE SET NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_control_actions_created
+                ON control_actions(created_at DESC)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_control_actions_port
+                ON control_actions(dpid, port_no, created_at DESC)
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS active_control_actions (
+                id BIGSERIAL PRIMARY KEY,
+                dpid BIGINT NOT NULL,
+                port_no INTEGER NOT NULL,
+                strategy TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_param DOUBLE PRECISION NOT NULL DEFAULT 0,
+                confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'active',
+                cooldown_until TIMESTAMPTZ,
+                evaluate_after TIMESTAMPTZ,
+                stable_cycles INTEGER NOT NULL DEFAULT 0,
+                baseline_kpi JSONB NOT NULL DEFAULT '{}'::jsonb,
+                latest_kpi JSONB,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                control_action_id BIGINT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (dpid, port_no),
+                FOREIGN KEY (control_action_id) REFERENCES control_actions(id) ON DELETE SET NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_active_control_state
+                ON active_control_actions(state, evaluate_after)
+        """)
+
+        await conn.execute("""
             CREATE OR REPLACE FUNCTION cleanup_old_port_stats(days INT)
             RETURNS VOID AS $$
             BEGIN

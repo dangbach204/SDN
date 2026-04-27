@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import Summary from "./components/Summary"
 import BandwidthChart from "./components/BandwidthChart"
 import UtilizationBars from "./components/UtilizationBars"
@@ -6,10 +6,37 @@ import PortTable from "./components/PortTable"
 import AnomalyTable from "./components/AnomalyTable"
 import Recommendations from "./components/Recommendations"
 import Topology from "./components/Topology"
+import ControlLoopPanel from "./components/ControlLoopPanel"
 
 export const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
 
 const REFRESH_INTERVAL = 60_000  // 1 phút — khớp với POLL_INTERVAL của Ryu
+
+function parseAppliedLimitMbps(rec) {
+  if (rec?.status !== "applied") return null
+
+  let actions = []
+  try {
+    actions = JSON.parse(rec.actions_json || "[]")
+  } catch {
+    actions = []
+  }
+
+  const chosenId = String(rec.chosen_action || "")
+  if (Array.isArray(actions) && chosenId) {
+    const chosen = actions.find(a => String(a?.id) === chosenId)
+    const param = Number(chosen?.param)
+    if (Number.isFinite(param) && param > 0) return param
+  }
+
+  const match = chosenId.match(/qos_(\d+(?:\.\d+)?)/i)
+  if (match) {
+    const parsed = Number(match[1])
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+
+  return null
+}
 
 export default function App() {
   const [summary,    setSummary]    = useState(null)
@@ -17,6 +44,8 @@ export default function App() {
   const [utilization,setUtilization]= useState([])
   const [anomalies,  setAnomalies]  = useState([])
   const [recs,       setRecs]       = useState([])
+  const [controlState, setControlState] = useState(null)
+  const [controlActions, setControlActions] = useState([])
   const [lastUpdate, setLastUpdate] = useState("")
   const [online,     setOnline]     = useState(true)
 
@@ -29,11 +58,19 @@ export default function App() {
         fetch(`${API}/api/anomalies`).then(r => r.json()),
         fetch(`${API}/api/recommendations`).then(r => r.json()),
       ])
+
+      const [ctl, ca] = await Promise.all([
+        fetch(`${API}/api/control/state`).then(r => (r.ok ? r.json() : null)).catch(() => null),
+        fetch(`${API}/api/control/actions?limit=12`).then(r => (r.ok ? r.json() : [])).catch(() => []),
+      ])
+
       setSummary(sum)
       setPortStats(ps)
       setUtilization(ut)
       setAnomalies(an)
       setRecs(rc)
+      if (ctl) setControlState(ctl)
+      if (Array.isArray(ca)) setControlActions(ca)
       setOnline(true)
       setLastUpdate(new Date().toLocaleTimeString("vi"))
     } catch {
@@ -48,6 +85,23 @@ export default function App() {
   }, [fetchAll])
 
   const pendingCount = recs.filter(r => r.status === "pending").length
+  const appliedLimits = useMemo(() => {
+    const map = {}
+    for (const rec of recs) {
+      const dpid = Number(rec?.dpid)
+      const portNo = Number(rec?.port_no)
+      if (!Number.isFinite(dpid) || !Number.isFinite(portNo)) continue
+
+      const limitMbps = parseAppliedLimitMbps(rec)
+      const key = `${dpid}-${portNo}`
+      if (limitMbps !== null) {
+        map[key] = limitMbps
+      } else if (!(key in map)) {
+        map[key] = null
+      }
+    }
+    return map
+  }, [recs])
 
   return (
     <div className="app">
@@ -85,16 +139,23 @@ export default function App() {
         {/* Summary cards */}
         <Summary data={summary} />
 
+        {/* Closed-loop autonomous control */}
+        <ControlLoopPanel
+          state={controlState}
+          actions={controlActions}
+          onRefresh={fetchAll}
+        />
+
         {/* Chart + Utilization */}
         <div className="grid-chart">
           <BandwidthChart portStats={portStats} />
-          <UtilizationBars rows={utilization} />
+          <UtilizationBars rows={utilization} appliedLimits={appliedLimits} />
         </div>
 
         {/* Topology + Port table */}
         <div className="grid-topo">
           <Topology portStats={portStats} />
-          <PortTable rows={portStats} />
+          <PortTable rows={portStats} appliedLimits={appliedLimits} />
         </div>
 
         {/* Recommendations */}

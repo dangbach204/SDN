@@ -4,6 +4,7 @@ import { API } from "../App"
 const TAG_CLASS = {
   QoS:         "tag-qos",
   BLOCK:       "tag-block",
+  REROUTE:     "tag-reroute",
   MONITOR:     "tag-monitor",
   INVESTIGATE: "tag-investigate",
 }
@@ -41,7 +42,17 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
         body:    JSON.stringify(body),
       })
       const data = await res.json()
-      if (data.action) alert(`Kết quả: ${data.action}`)
+      const lines = []
+      if (data.action) lines.push(`Thực thi: ${data.action}`)
+      if (data.verification) lines.push(`Xác minh: ${data.verification}`)
+      if (typeof data.before_mbps === "number" && typeof data.after_mbps === "number") {
+        lines.push(`BW trước/sau: ${data.before_mbps.toFixed(2)} -> ${data.after_mbps.toFixed(2)} Mbps`)
+      }
+
+      if (lines.length > 0) {
+        const prefix = data.result === "ok" ? "Kết quả" : "Thất bại"
+        alert(`${prefix}:\n${lines.join("\n")}`)
+      }
       await onRefresh()
     } catch {
       alert("Lỗi kết nối backend")

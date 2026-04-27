@@ -8,6 +8,19 @@ from database import get_pool
 router = APIRouter(tags=["stats"])
 
 
+# Topology hiện tại dùng tam giác 3 switch (s1-s2, s2-s3, s1-s3).
+# Các port uplink là 100 Mbps, các port host là 50 Mbps.
+UPLINK_PORTS = {
+    (1, 1), (1, 2),
+    (2, 1), (2, 2),
+    (3, 1), (3, 2),
+}
+
+
+def _capacity_mbps(dpid: int, port_no: int) -> float:
+    return 100.0 if (dpid, port_no) in UPLINK_PORTS else 50.0
+
+
 @router.get("/summary")
 async def summary():
     pool = await get_pool()
@@ -16,12 +29,13 @@ async def summary():
         total_anom = await conn.fetchval("SELECT COUNT(*) FROM anomalies")
         high       = await conn.fetchval("SELECT COUNT(*) FROM anomalies WHERE level='high'")
         warn       = await conn.fetchval("SELECT COUNT(*) FROM anomalies WHERE level='medium'")
+        zscore     = await conn.fetchval("SELECT COUNT(*) FROM anomalies WHERE message ILIKE '%Z-score%'")
     return {
         "total_records":    total,
         "total_anomalies":  total_anom,
         "high":   high,
         "warn":   warn,
-        "zscore": 0,
+        "zscore": zscore,
     }
 
 
@@ -40,7 +54,18 @@ async def port_stats():
             GROUP BY dpid, port_no
             ORDER BY AVG(speed_rx) + AVG(speed_tx) DESC
         """)
-    return [dict(r) for r in rows]
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        avg_total = (d.get("avg_rx") or 0) + (d.get("avg_tx") or 0)
+        cap_mbps = _capacity_mbps(d["dpid"], d["port_no"])
+        d["avg_total"] = avg_total
+        d["capacity_mbps"] = cap_mbps
+        d["is_uplink"] = (d["dpid"], d["port_no"]) in UPLINK_PORTS
+        d["utilization_pct"] = round(avg_total / (cap_mbps * 1e6) * 100, 1) if cap_mbps > 0 else 0.0
+        result.append(d)
+    return result
 
 
 @router.get("/history/{dpid}/{port_no}")
@@ -59,7 +84,7 @@ async def history(dpid: int, port_no: int):
 
 @router.get("/utilization")
 async def utilization():
-    """Link utilization % theo capacity 50 Mbps."""
+    """Link utilization % theo capacity thực tế của từng port."""
     pool   = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -73,7 +98,10 @@ async def utilization():
     result = []
     for r in rows:
         d = dict(r)
-        d["utilization_pct"] = round((d["avg_total"] or 0) / (50 * 1e6) * 100, 1)
+        cap_mbps = _capacity_mbps(d["dpid"], d["port_no"])
+        d["capacity_mbps"] = cap_mbps
+        d["is_uplink"] = (d["dpid"], d["port_no"]) in UPLINK_PORTS
+        d["utilization_pct"] = round((d["avg_total"] or 0) / (cap_mbps * 1e6) * 100, 1) if cap_mbps > 0 else 0.0
         result.append(d)
     return result
 

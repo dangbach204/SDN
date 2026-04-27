@@ -42,12 +42,23 @@ RULES = [
         "root_cause":  lambda dpid, port, speed, **kw:
                        f"Băng thông {speed/1e6:.1f} Mbps trong vùng cảnh báo (10–20 Mbps). "
                        f"Nếu tiếp tục tăng trong 2–3 chu kỳ, cần can thiệp.",
-        "actions":     lambda dpid, port, **kw: [
-            {"id":"monitor", "label":"Tiếp tục theo dõi","type":"MONITOR","param":0,
-             "desc":"Chờ thêm dữ liệu"},
-            {"id":"qos_15",  "label":"Giới hạn phòng ngừa 15 Mbps","type":"QoS","param":15,
-             "desc":"Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
-        ],
+        "actions":     lambda dpid, port, **kw: (
+            [
+                {"id":"reroute", "label":"Chuyển hướng qua đường dự phòng","type":"REROUTE","param":0,
+                 "desc":"Cài flow ưu tiên để chuyển lưu lượng sang uplink backup"},
+                {"id":"monitor", "label":"Tiếp tục theo dõi","type":"MONITOR","param":0,
+                 "desc":"Chờ thêm dữ liệu"},
+                {"id":"qos_15",  "label":"Giới hạn phòng ngừa 15 Mbps","type":"QoS","param":15,
+                 "desc":"Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
+            ]
+            if port in {1, 2}
+            else [
+                {"id":"monitor", "label":"Tiếp tục theo dõi","type":"MONITOR","param":0,
+                 "desc":"Port host không có uplink dự phòng để reroute"},
+                {"id":"qos_15",  "label":"Giới hạn phòng ngừa 15 Mbps","type":"QoS","param":15,
+                 "desc":"Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
+            ]
+        ),
     },
     {
         "name":        "zscore_anomaly",
@@ -66,14 +77,27 @@ RULES = [
                        f"{abs(speed-statistics.mean(history))/statistics.stdev(history):.1f} "
                        f"độ lệch chuẩn (TB={statistics.mean(history)/1e6:.1f} Mbps). "
                        f"Nguyên nhân: luồng mới, truyền file đột ngột, hoặc dấu hiệu tấn công sớm.",
-        "actions":     lambda dpid, port, **kw: [
-            {"id":"investigate","label":"Xem flow table","type":"INVESTIGATE","param":0,
-             "desc":f"dump-flows s{dpid} để tìm luồng bất thường"},
-            {"id":"qos_10",     "label":"Giới hạn phòng ngừa 10 Mbps","type":"QoS","param":10,
-             "desc":"Ngăn leo thang nếu là tấn công"},
-            {"id":"monitor",    "label":"Theo dõi thêm","type":"MONITOR","param":0,
-             "desc":"Chờ thêm dữ liệu để xác nhận"},
-        ],
+        "actions":     lambda dpid, port, **kw: (
+            [
+                {"id":"investigate","label":"Xem flow table","type":"INVESTIGATE","param":0,
+                 "desc":f"dump-flows s{dpid} để tìm luồng bất thường"},
+                {"id":"reroute", "label":"Chuyển hướng tạm thời","type":"REROUTE","param":0,
+                 "desc":"Đẩy lưu lượng qua uplink backup để giảm bão hòa"},
+                {"id":"qos_10",  "label":"Giới hạn phòng ngừa 10 Mbps","type":"QoS","param":10,
+                 "desc":"Ngăn leo thang nếu là tấn công"},
+                {"id":"monitor", "label":"Theo dõi thêm","type":"MONITOR","param":0,
+                 "desc":"Chờ thêm dữ liệu để xác nhận"},
+            ]
+            if port in {1, 2}
+            else [
+                {"id":"investigate","label":"Xem flow table","type":"INVESTIGATE","param":0,
+                 "desc":f"dump-flows s{dpid} để tìm luồng bất thường"},
+                {"id":"qos_10",     "label":"Giới hạn phòng ngừa 10 Mbps","type":"QoS","param":10,
+                 "desc":"Ngăn leo thang nếu là tấn công"},
+                {"id":"monitor",    "label":"Theo dõi thêm","type":"MONITOR","param":0,
+                 "desc":"Port host không có uplink dự phòng để reroute"},
+            ]
+        ),
     },
     {
         "name":        "sustained_high",
