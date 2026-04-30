@@ -6,7 +6,6 @@ import PortTable from "./components/PortTable"
 import AnomalyTable from "./components/AnomalyTable"
 import Recommendations from "./components/Recommendations"
 import Topology from "./components/Topology"
-import ControlLoopPanel from "./components/ControlLoopPanel"
 
 export const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
 
@@ -44,8 +43,6 @@ export default function App() {
   const [utilization,setUtilization]= useState([])
   const [anomalies,  setAnomalies]  = useState([])
   const [recs,       setRecs]       = useState([])
-  const [controlState, setControlState] = useState(null)
-  const [controlActions, setControlActions] = useState([])
   const [lastUpdate, setLastUpdate] = useState("")
   const [online,     setOnline]     = useState(true)
 
@@ -59,18 +56,11 @@ export default function App() {
         fetch(`${API}/api/recommendations`).then(r => r.json()),
       ])
 
-      const [ctl, ca] = await Promise.all([
-        fetch(`${API}/api/control/state`).then(r => (r.ok ? r.json() : null)).catch(() => null),
-        fetch(`${API}/api/control/actions?limit=12`).then(r => (r.ok ? r.json() : [])).catch(() => []),
-      ])
-
       setSummary(sum)
       setPortStats(ps)
       setUtilization(ut)
       setAnomalies(an)
       setRecs(rc)
-      if (ctl) setControlState(ctl)
-      if (Array.isArray(ca)) setControlActions(ca)
       setOnline(true)
       setLastUpdate(new Date().toLocaleTimeString("vi"))
     } catch {
@@ -98,6 +88,23 @@ export default function App() {
         map[key] = limitMbps
       } else if (!(key in map)) {
         map[key] = null
+      }
+    }
+    return map
+  }, [recs])
+
+  const appliedBlocks = useMemo(() => {
+    const map = {}
+    for (const rec of recs) {
+      if (rec?.status !== "applied") continue
+
+      const dpid = Number(rec?.dpid)
+      const portNo = Number(rec?.port_no)
+      if (!Number.isFinite(dpid) || !Number.isFinite(portNo)) continue
+
+      const action = String(rec?.chosen_action || rec?.action_type || "").toLowerCase()
+      if (action === "block" || action.includes("block")) {
+        map[`${dpid}-${portNo}`] = true
       }
     }
     return map
@@ -139,13 +146,6 @@ export default function App() {
         {/* Summary cards */}
         <Summary data={summary} />
 
-        {/* Closed-loop autonomous control */}
-        <ControlLoopPanel
-          state={controlState}
-          actions={controlActions}
-          onRefresh={fetchAll}
-        />
-
         {/* Chart + Utilization */}
         <div className="grid-chart">
           <BandwidthChart portStats={portStats} />
@@ -155,7 +155,12 @@ export default function App() {
         {/* Topology + Port table */}
         <div className="grid-topo">
           <Topology portStats={portStats} />
-          <PortTable rows={portStats} appliedLimits={appliedLimits} />
+          <PortTable
+            rows={portStats}
+            appliedLimits={appliedLimits}
+            appliedBlocks={appliedBlocks}
+            onRefresh={fetchAll}
+          />
         </div>
 
         {/* Recommendations */}

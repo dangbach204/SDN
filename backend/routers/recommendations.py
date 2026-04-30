@@ -19,17 +19,6 @@ load_dotenv()
 
 DEFAULT_RYU_URL = "http://127.0.0.1:8080"
 BLOCK_PRIORITY = 20
-REROUTE_PRIORITY = 25
-
-# Topology tam giác 3 switch: mỗi uplink có một cổng backup đối xứng.
-REROUTE_BACKUP_PORT = {
-    (1, 1): 2,
-    (1, 2): 1,
-    (2, 1): 2,
-    (2, 2): 1,
-    (3, 1): 2,
-    (3, 2): 1,
-}
 
 
 def _ryu_candidates() -> list[str]:
@@ -96,32 +85,6 @@ def _ovs_unblock(dpid: int, port_no: int) -> tuple[bool, str]:
     return False, (res.stderr or res.stdout or "unknown error").strip()
 
 
-def _ovs_add_reroute(dpid: int, in_port: int, out_port: int) -> tuple[bool, str]:
-    switch_name = f"s{dpid}"
-    cmd = [
-        "sudo", "ovs-ofctl", "-O", "OpenFlow13",
-        "add-flow", switch_name,
-        f"priority={REROUTE_PRIORITY},in_port={in_port},actions=output:{out_port}",
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode == 0:
-        return True, "ovs-ofctl"
-    return False, (res.stderr or res.stdout or "unknown error").strip()
-
-
-def _ovs_del_reroute(dpid: int, in_port: int) -> tuple[bool, str]:
-    switch_name = f"s{dpid}"
-    cmd = [
-        "sudo", "ovs-ofctl", "-O", "OpenFlow13", "--strict",
-        "del-flows", switch_name,
-        f"priority={REROUTE_PRIORITY},in_port={in_port}",
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode == 0:
-        return True, "ovs-ofctl"
-    return False, (res.stderr or res.stdout or "unknown error").strip()
-
-
 def _dump_flows(dpid: int) -> tuple[bool, str]:
     cmd = ["sudo", "ovs-ofctl", "-O", "OpenFlow13", "dump-flows", f"s{dpid}"]
     res = subprocess.run(cmd, capture_output=True, text=True)
@@ -136,28 +99,6 @@ def _has_drop_rule(flow_dump: str, port_no: int) -> bool:
             f"priority={BLOCK_PRIORITY}" in line
             and f"in_port={port_no}" in line
             and "actions=drop" in line
-        ):
-            return True
-    return False
-
-
-def _has_reroute_rule(flow_dump: str, in_port: int, out_port: int) -> bool:
-    for line in flow_dump.splitlines():
-        if (
-            f"priority={REROUTE_PRIORITY}" in line
-            and f"in_port={in_port}" in line
-            and f"actions=output:{out_port}" in line
-        ):
-            return True
-    return False
-
-
-def _has_any_reroute_for_in_port(flow_dump: str, in_port: int) -> bool:
-    for line in flow_dump.splitlines():
-        if (
-            f"priority={REROUTE_PRIORITY}" in line
-            and f"in_port={in_port}" in line
-            and "actions=output:" in line
         ):
             return True
     return False
@@ -184,16 +125,6 @@ def _has_tc_limit(dpid: int, port_no: int, param_mbps: float) -> tuple[bool, str
     if "tbf" in normalized and expected in normalized:
         return True, f"qdisc {port_name} có {expected}"
     return False, f"qdisc {port_name} không chứa {expected}. Raw: {output.strip()}"
-
-
-def _reroute_target_port(
-    dpid: int,
-    port_no: int,
-    requested_port: Optional[int] = None,
-) -> Optional[int]:
-    if requested_port is not None and requested_port > 0:
-        return int(requested_port)
-    return REROUTE_BACKUP_PORT.get((dpid, port_no))
 
 
 async def _read_recent_speed_mbps(dpid: int, port_no: int) -> Optional[float]:
@@ -241,47 +172,6 @@ def _verify_action_effect(
             return False, f"DROP rule priority {BLOCK_PRIORITY} vẫn còn trên in_port={port_no}"
         return True, f"DROP rule priority {BLOCK_PRIORITY} đã được gỡ trên in_port={port_no}"
 
-    if normalized == "reroute":
-        requested_port = int(param_mbps) if param_mbps >= 1 else None
-        backup_port = _reroute_target_port(dpid, port_no, requested_port)
-        if backup_port is None:
-            return False, f"Port s{dpid}/{port_no} không có uplink backup để reroute"
-
-        ok, detail = _dump_flows(dpid)
-        if not ok:
-            return False, f"Không đọc được flow table: {detail}"
-        if _has_reroute_rule(detail, port_no, backup_port):
-            return True, (
-                f"Đã xác minh reroute rule priority {REROUTE_PRIORITY}: "
-                f"in_port={port_no} -> output={backup_port}"
-            )
-        return False, (
-            f"Không thấy reroute rule priority {REROUTE_PRIORITY} "
-            f"in_port={port_no} -> output={backup_port}"
-        )
-
-    if normalized == "unreroute":
-        requested_port = int(param_mbps) if param_mbps >= 1 else None
-        backup_port = _reroute_target_port(dpid, port_no, requested_port)
-        ok, detail = _dump_flows(dpid)
-        if not ok:
-            return False, f"Không đọc được flow table: {detail}"
-
-        if backup_port is None:
-            if _has_any_reroute_for_in_port(detail, port_no):
-                return False, f"Reroute rule priority {REROUTE_PRIORITY} vẫn còn trên in_port={port_no}"
-            return True, f"Không còn reroute rule priority {REROUTE_PRIORITY} trên in_port={port_no}"
-
-        if _has_reroute_rule(detail, port_no, backup_port):
-            return False, (
-                f"Reroute rule priority {REROUTE_PRIORITY} vẫn còn: "
-                f"in_port={port_no} -> output={backup_port}"
-            )
-        return True, (
-            f"Reroute rule priority {REROUTE_PRIORITY} đã được gỡ: "
-            f"in_port={port_no}"
-        )
-
     if normalized == "reset_qos":
         ok, detail = _read_tc_qdisc(dpid, port_no)
         if not ok:
@@ -315,7 +205,6 @@ async def list_recommendations():
                    CASE
                        WHEN action_type = 'limit_bandwidth' THEN 'QoS'
                        WHEN action_type = 'block' THEN 'BLOCK'
-                       WHEN action_type = 'reroute' THEN 'REROUTE'
                        ELSE 'MONITOR'
                    END AS action_type,
                    message,
@@ -344,6 +233,11 @@ class ChooseBody(BaseModel):
     action_id:   str
     action_type: str
     param:       float = 0
+
+
+class PortActionBody(BaseModel):
+    action_type: str
+    param: float = 0
 
 @router.post("/recommendations/{rec_id}/choose")
 async def choose_action(rec_id: int, body: ChooseBody):
@@ -418,11 +312,88 @@ async def choose_action(rec_id: int, body: ChooseBody):
     }
 
 
+async def _sync_port_state_after_manual_action(
+    dpid: int,
+    port_no: int,
+    action_type: str,
+) -> None:
+    normalized = (action_type or "").strip().lower()
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        if normalized == "reset_qos":
+            await conn.execute(
+                """
+                UPDATE recommendations
+                SET status='dismissed'
+                WHERE dpid=$1 AND port_no=$2 AND status='applied'
+                  AND (
+                    action_type='limit_bandwidth'
+                    OR COALESCE(chosen_action, '') ILIKE 'qos_%'
+                  )
+                """,
+                dpid,
+                port_no,
+            )
+
+        if normalized == "unblock":
+            await conn.execute(
+                """
+                UPDATE recommendations
+                SET status='dismissed'
+                WHERE dpid=$1 AND port_no=$2 AND status='applied'
+                  AND (
+                    action_type='block'
+                    OR COALESCE(chosen_action, '') ILIKE '%block%'
+                  )
+                """,
+                dpid,
+                port_no,
+            )
+
+
+@router.post("/ports/{dpid}/{port_no}/action")
+async def execute_port_action(dpid: int, port_no: int, body: PortActionBody):
+    normalized_type = (body.action_type or "").strip().lower()
+    if normalized_type not in {"reset_qos", "unblock"}:
+        raise HTTPException(400, "Chỉ hỗ trợ reset_qos hoặc unblock")
+
+    before_mbps = await _read_recent_speed_mbps(dpid, port_no)
+    ok, result = await _execute_action(dpid, port_no, normalized_type, body.param)
+
+    verified_ok = False
+    verification_msg = "Bỏ qua xác minh vì action thực thi thất bại"
+    if ok:
+        verified_ok, verification_msg = _verify_action_effect(
+            dpid,
+            port_no,
+            normalized_type,
+            body.param,
+        )
+
+    if ok and verified_ok:
+        await _sync_port_state_after_manual_action(dpid, port_no, normalized_type)
+
+    after_mbps = await _read_recent_speed_mbps(dpid, port_no)
+    delta_mbps = None
+    if before_mbps is not None and after_mbps is not None:
+        delta_mbps = round(after_mbps - before_mbps, 3)
+
+    return {
+        "result": "ok" if (ok and verified_ok) else "error",
+        "action": result,
+        "verification": verification_msg,
+        "execution_ok": ok,
+        "verification_ok": verified_ok,
+        "before_mbps": before_mbps,
+        "after_mbps": after_mbps,
+        "delta_mbps": delta_mbps,
+    }
+
+
 async def _execute_action(dpid: int, port_no: int,
                            action_type: str, param_mbps: float) -> tuple[bool, str]:
-    """
-    Thực thi action bằng cách gọi Ryu ofctl_rest hoặc chạy tc trực tiếp.
-    """
+    
     normalized = (action_type or "").strip().lower()
 
     if normalized in {"qos", "limit_bandwidth"} and param_mbps > 0:
@@ -480,61 +451,6 @@ async def _execute_action(dpid: int, port_no: int,
 
         return False, (
             "Ryu unblock failed: "
-            f"{detail}. Fallback ovs-ofctl failed: {ovs_detail}"
-        )
-
-    elif normalized == "reroute":
-        requested_port = int(param_mbps) if param_mbps >= 1 else None
-        backup_port = _reroute_target_port(dpid, port_no, requested_port)
-        if backup_port is None:
-            return False, f"Port s{dpid}/{port_no} không có uplink backup để reroute"
-
-        ok, detail = await _ryu_post(
-            "/stats/flowentry/add",
-            {
-                "dpid": dpid,
-                "priority": REROUTE_PRIORITY,
-                "match": {"in_port": port_no},
-                "actions": [{"type": "OUTPUT", "port": backup_port}],
-            },
-        )
-        if ok:
-            return True, (
-                f"Đã reroute port s{dpid}/{port_no} sang uplink {backup_port} "
-                f"qua {detail}"
-            )
-
-        ovs_ok, ovs_detail = _ovs_add_reroute(dpid, port_no, backup_port)
-        if ovs_ok:
-            return True, (
-                f"Đã reroute port s{dpid}/{port_no} sang uplink {backup_port} "
-                f"bằng fallback {ovs_detail}"
-            )
-
-        return False, (
-            "Reroute failed: "
-            f"{detail}. Fallback ovs-ofctl failed: {ovs_detail}"
-        )
-
-    elif normalized == "unreroute":
-        delete_payload = {
-            "dpid": dpid,
-            "priority": REROUTE_PRIORITY,
-            "match": {"in_port": port_no},
-        }
-        ok, detail = await _ryu_post("/stats/flowentry/delete_strict", delete_payload)
-        if not ok:
-            ok, detail = await _ryu_post("/stats/flowentry/delete", delete_payload)
-
-        if ok:
-            return True, f"Đã gỡ reroute trên s{dpid}/{port_no} qua {detail}"
-
-        ovs_ok, ovs_detail = _ovs_del_reroute(dpid, port_no)
-        if ovs_ok:
-            return True, f"Đã gỡ reroute trên s{dpid}/{port_no} bằng fallback {ovs_detail}"
-
-        return False, (
-            "Unreroute failed: "
             f"{detail}. Fallback ovs-ofctl failed: {ovs_detail}"
         )
 

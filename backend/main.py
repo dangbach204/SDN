@@ -8,23 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 
 from database import init_db
-from closed_loop import ClosedLoopController
 from decision_engine import DecisionEngine
-from routers import stats, anomalies, recommendations, internal, control
+from routers import stats, anomalies, recommendations, internal
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     engine = DecisionEngine()
-    controller = ClosedLoopController()
-    app.state.closed_loop_controller = controller
 
     decision_task = asyncio.create_task(engine.loop())
-    control_task = asyncio.create_task(controller.loop())
     yield
     decision_task.cancel()
-    control_task.cancel()
 
 
 app = FastAPI(title="SDN Traffic Monitor API", lifespan=lifespan)
@@ -39,7 +34,6 @@ app.add_middleware(
 app.include_router(stats.router,            prefix="/api")
 app.include_router(anomalies.router,        prefix="/api")
 app.include_router(recommendations.router,  prefix="/api")
-app.include_router(control.router,          prefix="/api")
 app.include_router(internal.router)
 
 

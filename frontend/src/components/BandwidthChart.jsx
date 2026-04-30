@@ -52,8 +52,15 @@ export default function BandwidthChart({ portStats }) {
           },
           y: {
             title: { display: true, text: "Mbps", font: { size: 11 } },
-            ticks: { font: { family: "DM Mono", size: 10 } },
-            grid:  { color: "rgba(0,0,0,0.05)" }
+            ticks: {
+              font: { family: "DM Mono", size: 10 },
+              callback: function(value) {
+                if (Math.abs(value) < 0.0001) return 0;
+                return value;
+              }
+            },
+            grid:  { color: "rgba(0,0,0,0.05)" },
+            beginAtZero: true
           }
         }
       }

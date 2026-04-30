@@ -1,8 +1,38 @@
 import { useState } from "react"
+import { API } from "../App"
 
-export default function PortTable({ rows, appliedLimits = {} }) {
+export default function PortTable({ rows, appliedLimits = {}, appliedBlocks = {}, onRefresh }) {
   const [filter, setFilter] = useState("all")
+  const [loading, setLoading] = useState({})
   const filtered = filter === "all" ? rows : rows.filter(r => String(r.dpid) === filter)
+
+  async function runPortAction(dpid, portNo, actionType) {
+    const key = `${dpid}-${portNo}-${actionType}`
+    setLoading(prev => ({ ...prev, [key]: true }))
+    try {
+      const res = await fetch(`${API}/api/ports/${dpid}/${portNo}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action_type: actionType, param: 0 }),
+      })
+      const data = await res.json()
+      if (!res.ok || data?.result !== "ok") {
+        const msg = data?.verification || data?.action || "Thực thi thất bại"
+        alert(`Lỗi: ${msg}`)
+        return
+      }
+
+      const doneLabel = actionType === "reset_qos" ? "Reset QoS" : "Unblock"
+      alert(`${doneLabel} thành công.\n${data.verification || data.action || ""}`)
+      if (typeof onRefresh === "function") {
+        await onRefresh()
+      }
+    } catch {
+      alert("Lỗi kết nối backend")
+    } finally {
+      setLoading(prev => ({ ...prev, [key]: false }))
+    }
+  }
 
   return (
     <div className="card">
@@ -30,11 +60,12 @@ export default function PortTable({ rows, appliedLimits = {} }) {
             <th>TX (Mbps)</th>
             <th>Peak</th>
             <th>Util%</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {filtered.length === 0 && (
-            <tr><td colSpan={6} className="empty">Chưa có dữ liệu</td></tr>
+            <tr><td colSpan={7} className="empty">Chưa có dữ liệu</td></tr>
           )}
           {filtered.map(r => {
             const rx  = ((r.avg_rx  || 0) / 1e6).toFixed(2)
@@ -50,7 +81,10 @@ export default function PortTable({ rows, appliedLimits = {} }) {
             const limitPct = Number.isFinite(limitMbps)
               ? Math.min((limitMbps / capacityMbps) * 100, 100)
               : null
-            const limitText = limitPct === null ? "None" : `${limitPct.toFixed(1)}%`
+            const isBlocked = appliedBlocks[`${r.dpid}-${r.port_no}`] === true
+            const hasLimit = Number.isFinite(limitMbps) && limitMbps > 0
+            const resetKey = `${r.dpid}-${r.port_no}-reset_qos`
+            const unblockKey = `${r.dpid}-${r.port_no}-unblock`
             return (
               <tr key={`${r.dpid}-${r.port_no}`}>
                 <td className="mono bold">s{r.dpid}</td>
@@ -64,8 +98,41 @@ export default function PortTable({ rows, appliedLimits = {} }) {
                       <div className="pct-fill" style={{ width: `${pct}%`, background: col }} />
                     </div>
                     <span className="mono" style={{ color: col, minWidth: 118, fontSize: 10 }}>
-                      {pct.toFixed(0)}% · {limitText}
+                      {pct.toFixed(0)}%
+                      {" · "}
+                      {isBlocked ? (
+                        <span className="port-block-label">Block</span>
+                      ) : (
+                        <span>{limitPct === null ? "None" : `${limitPct.toFixed(1)}%`}</span>
+                      )}
                     </span>
+                  </div>
+                </td>
+                <td>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {hasLimit && (
+                      <button
+                        className="btn btn-dismiss"
+                        style={{ padding: "4px 10px", fontSize: 12 }}
+                        disabled={loading[resetKey] === true}
+                        onClick={() => runPortAction(r.dpid, r.port_no, "reset_qos")}
+                      >
+                        {loading[resetKey] ? "Đang reset..." : "Reset QoS"}
+                      </button>
+                    )}
+                    {isBlocked && (
+                      <button
+                        className="btn btn-dismiss"
+                        style={{ padding: "4px 10px", fontSize: 12, borderColor: "var(--red)", color: "var(--red)" }}
+                        disabled={loading[unblockKey] === true}
+                        onClick={() => runPortAction(r.dpid, r.port_no, "unblock")}
+                      >
+                        {loading[unblockKey] ? "Đang unblock..." : "Unblock"}
+                      </button>
+                    )}
+                    {!hasLimit && !isBlocked && (
+                      <span className="text-muted">-</span>
+                    )}
                   </div>
                 </td>
               </tr>

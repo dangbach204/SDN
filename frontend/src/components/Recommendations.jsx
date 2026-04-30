@@ -1,21 +1,55 @@
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { API } from "../App"
 
 const TAG_CLASS = {
   QoS:         "tag-qos",
   BLOCK:       "tag-block",
-  REROUTE:     "tag-reroute",
   MONITOR:     "tag-monitor",
   INVESTIGATE: "tag-investigate",
 }
 
 export default function Recommendations({ recs, pendingCount, onRefresh }) {
   const [filter,          setFilter]          = useState("all")
+  const [switchFilter,    setSwitchFilter]    = useState("all")
+  const [ethFilter,       setEthFilter]       = useState("all")
+  const [switchQuery,     setSwitchQuery]     = useState("")
   const [expanded,        setExpanded]        = useState({})
   const [selectedActions, setSelectedActions] = useState({})
   const [loading,         setLoading]         = useState({})
 
-  const filtered = filter === "all" ? recs : recs.filter(r => r.status === filter)
+  const availableSwitches = useMemo(() => {
+    return [...new Set(recs.map(r => Number(r.dpid)).filter(Number.isFinite))].sort((a, b) => a - b)
+  }, [recs])
+
+  const availableEths = useMemo(() => {
+    const scoped = switchFilter === "all"
+      ? recs
+      : recs.filter(r => String(r.dpid) === switchFilter)
+
+    return [...new Set(scoped.map(r => Number(r.port_no)).filter(Number.isFinite))].sort((a, b) => a - b)
+  }, [recs, switchFilter])
+
+  useEffect(() => {
+    if (ethFilter !== "all" && !availableEths.includes(Number(ethFilter))) {
+      setEthFilter("all")
+    }
+  }, [availableEths, ethFilter])
+
+  const filtered = useMemo(() => {
+    const query = switchQuery.trim().toLowerCase()
+
+    return recs.filter(rec => {
+      if (filter !== "all" && rec.status !== filter) return false
+      if (switchFilter !== "all" && String(rec.dpid) !== switchFilter) return false
+      if (ethFilter !== "all" && String(rec.port_no) !== ethFilter) return false
+      if (query) {
+        const swLabel = `s${rec.dpid}`.toLowerCase()
+        const dpidText = String(rec.dpid).toLowerCase()
+        if (!swLabel.includes(query) && !dpidText.includes(query)) return false
+      }
+      return true
+    })
+  }, [ethFilter, filter, recs, switchFilter, switchQuery])
 
   function toggleExpand(id) {
     setExpanded(e => ({ ...e, [id]: !e[id] }))
@@ -87,6 +121,51 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
           ))}
         </div>
       </div>
+          <div className="rec-filters">
+            <label className="rec-search">
+              <span>Tìm switch</span>
+              <input
+                type="text"
+                value={switchQuery}
+                onChange={e => setSwitchQuery(e.target.value)}
+                placeholder="Nhập s1, s2, ..."
+              />
+            </label>
+
+            <div className="rec-filter-group">
+              <div className="rec-filter-label">Switch</div>
+              <div className="sw-tabs rec-tab-row">
+                <button
+                  className={`sw-tab ${switchFilter === "all" ? "active" : ""}`}
+                  onClick={() => setSwitchFilter("all")}
+                >Tất cả</button>
+                {availableSwitches.map(sw => (
+                  <button
+                    key={sw}
+                    className={`sw-tab ${switchFilter === String(sw) ? "active" : ""}`}
+                    onClick={() => setSwitchFilter(String(sw))}
+                  >S{sw}</button>
+                ))}
+              </div>
+            </div>
+
+            <div className="rec-filter-group">
+              <div className="rec-filter-label">Eth</div>
+              <div className="sw-tabs rec-tab-row">
+                <button
+                  className={`sw-tab ${ethFilter === "all" ? "active" : ""}`}
+                  onClick={() => setEthFilter("all")}
+                >Tất cả</button>
+                {availableEths.map(portNo => (
+                  <button
+                    key={portNo}
+                    className={`sw-tab ${ethFilter === String(portNo) ? "active" : ""}`}
+                    onClick={() => setEthFilter(String(portNo))}
+                  >eth{portNo}</button>
+                ))}
+              </div>
+            </div>
+          </div>
 
       <div id="recPanel">
         {filtered.length === 0 && (

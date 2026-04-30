@@ -1,12 +1,20 @@
 """
-topo.py — Mininet topology
+topo.py — Mininet topology chuỗi thẳng s1—s2—s3
 Chạy: sudo python mininet/topo.py
 
-Thay đổi so với bản cũ:
-  - Bỏ lệnh 'tc qdisc add dev {sw.name} root htb r2q 100' sai
-    (sw.name là 's1','s2','s3' — không phải tên interface)
-  - QoS được áp dụng từ FastAPI qua lệnh tc trên interface cụ thể (s1-eth1, ...)
-  - r2q warning được xử lý bằng cách set burst lớn hơn khi cần
+Topology hiện tại: chuỗi thẳng (không có đường s1-s3)
+  s1 — s2 — s3
+
+Port mapping cố định:
+  s1-eth1 ↔ s2-eth1  (uplink s1—s2, 100 Mbps)
+  s2-eth2 ↔ s3-eth1  (uplink s2—s3, 100 Mbps)
+  s1-eth3..eth6  → h1..h4  (host ports, 50 Mbps)
+  s2-eth3..eth6  → h5..h8
+  s3-eth2..eth5  → h9..h12
+
+Thay đổi:
+  - Bỏ stp=True: xung đột với Ryu OpenFlow controller
+  - Link s1-s3 đã comment out (không có loop → không cần loop prevention)
 """
 from mininet.topo import Topo
 from mininet.net import Mininet
@@ -18,22 +26,18 @@ from mininet.link import TCLink
 
 class SDNTopo(Topo):
     def build(self):
-        # 3 switches dạng tam giác để có đường dự phòng:
-        # s1-s2, s2-s3 và s1-s3
-        # Bật STP để giảm nguy cơ loop broadcast trong topology có chu trình.
-        s1 = self.addSwitch('s1', protocols='OpenFlow13', stp=True)
-        s2 = self.addSwitch('s2', protocols='OpenFlow13', stp=True)
-        s3 = self.addSwitch('s3', protocols='OpenFlow13', stp=True)
+        # Topology chuỗi thẳng s1-s2-s3
+        s1 = self.addSwitch('s1', protocols='OpenFlow13')
+        s2 = self.addSwitch('s2', protocols='OpenFlow13')
+        s3 = self.addSwitch('s3', protocols='OpenFlow13')
 
-        # Uplink giữa các switch: 100 Mbps (gán port cố định để backend/frontend map ổn định)
-        # s1-eth1 <-> s2-eth1
+        # Uplink giữa các switch — port cố định
+        # s1-eth1 ↔ s2-eth1
         self.addLink(s1, s2, port1=1, port2=1, bw=100, delay='2ms')
-        # s2-eth2 <-> s3-eth1
+        # s2-eth2 ↔ s3-eth1
         self.addLink(s2, s3, port1=2, port2=1, bw=100, delay='2ms')
-        # s1-eth2 <-> s3-eth2 (alternate path)
-        self.addLink(s1, s3, port1=2, port2=2, bw=100, delay='3ms')
 
-        # 4 host mỗi switch, băng thông 50 Mbps mỗi link
+        # 4 host mỗi switch — 50 Mbps mỗi link
         host_switch_map = [
             ('h1', s1), ('h2', s1), ('h3', s1),  ('h4', s1),
             ('h5', s2), ('h6', s2), ('h7', s2),  ('h8', s2),
@@ -59,11 +63,9 @@ def run():
     )
     net.start()
 
-    # Kiểm tra kết nối cơ bản
     print("\n=== Ping test (h1 → h2) ===")
     h1, h2 = net.get('h1'), net.get('h2')
-    result = h1.cmd(f'ping -c 2 -W 1 {h2.IP()}')
-    print(result)
+    print(h1.cmd(f'ping -c 3 -W 1 {h2.IP()}'))
 
     CLI(net)
     net.stop()

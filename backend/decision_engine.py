@@ -16,8 +16,9 @@ RULES = [
         "condition":   lambda speed, history: speed >= 20e6,
         "level":       "high",
         "action_type": "limit_bandwidth",
-        "message":     lambda dpid, port, speed, **kw:
-                       f"Port s{dpid}/{port} đang dùng {speed/1e6:.1f} Mbps — vượt ngưỡng cao (20 Mbps)",
+        "message":     lambda dpid, port, speed, history, **kw:
+                       f"Băng thông đo được {speed/1e6:.1f} Mbps, vượt ngưỡng HIGH 20 Mbps. "
+                       f"Lịch sử gần nhất: {[round(s/1e6,1) for s in history[-3:]]} Mbps.",
         "root_cause":  lambda dpid, port, speed, **kw:
                        f"Băng thông {speed/1e6:.1f} Mbps vượt 20 Mbps. Nguyên nhân có thể: "
                        f"truyền file lớn, stream video, ứng dụng nền, hoặc DDoS nếu nhiều port cùng tăng.",
@@ -36,29 +37,27 @@ RULES = [
         "name":        "warn_bandwidth",
         "condition":   lambda speed, history: 10e6 <= speed < 20e6,
         "level":       "medium",
-        "action_type": "reroute",
-        "message":     lambda dpid, port, speed, **kw:
-                       f"Port s{dpid}/{port} đang dùng {speed/1e6:.1f} Mbps — cần theo dõi",
-        "root_cause":  lambda dpid, port, speed, **kw:
-                       f"Băng thông {speed/1e6:.1f} Mbps trong vùng cảnh báo (10–20 Mbps). "
-                       f"Nếu tiếp tục tăng trong 2–3 chu kỳ, cần can thiệp.",
-        "actions":     lambda dpid, port, **kw: (
-            [
-                {"id":"reroute", "label":"Chuyển hướng qua đường dự phòng","type":"REROUTE","param":0,
-                 "desc":"Cài flow ưu tiên để chuyển lưu lượng sang uplink backup"},
-                {"id":"monitor", "label":"Tiếp tục theo dõi","type":"MONITOR","param":0,
-                 "desc":"Chờ thêm dữ liệu"},
-                {"id":"qos_15",  "label":"Giới hạn phòng ngừa 15 Mbps","type":"QoS","param":15,
-                 "desc":"Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
-            ]
-            if port in {1, 2}
-            else [
-                {"id":"monitor", "label":"Tiếp tục theo dõi","type":"MONITOR","param":0,
-                 "desc":"Port host không có uplink dự phòng để reroute"},
-                {"id":"qos_15",  "label":"Giới hạn phòng ngừa 15 Mbps","type":"QoS","param":15,
-                 "desc":"Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
-            ]
-        ),
+        "action_type": "limit_bandwidth",
+        "message":     lambda dpid, port, speed, history, **kw:
+                       f"Băng thông đo được {speed/1e6:.1f} Mbps, trong vùng cảnh báo 10–20 Mbps. "
+                       f"Lịch sử gần nhất: {[round(s/1e6,1) for s in history[-3:]]} Mbps. "
+                       f"Xu hướng: {'TĂNG' if len(history) >= 2 and history[-1] >= history[-2] else 'ỔN ĐỊNH'}.",
+        "root_cause": lambda dpid, port, speed, history, **kw: (
+            f"Băng thông {speed/1e6:.1f} Mbps đang trong vùng cảnh báo (10–20 Mbps), "
+            f"ngưỡng HIGH là 20 Mbps. "
+            + (f"Xu hướng TĂNG — giá trị gần nhất: {[round(s/1e6,1) for s in history[-3:]]} Mbps. "
+               f"Nếu tiếp tục tăng trong 1–2 chu kỳ tới sẽ vượt ngưỡng HIGH."
+               if len(history) >= 2 and history[-1] >= history[-2]
+               else f"Xu hướng ỔN ĐỊNH — giá trị gần nhất: {[round(s/1e6,1) for s in history[-3:]]} Mbps. "
+               f"Theo dõi thêm 2 chu kỳ trước khi can thiệp."
+            )
+),
+        "actions":     lambda dpid, port, **kw: [
+            {"id":"qos_15",  "label":"Giới hạn phòng ngừa 15 Mbps","type":"QoS","param":15,
+             "desc":"Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
+            {"id":"monitor", "label":"Tiếp tục theo dõi","type":"MONITOR","param":0,
+             "desc":"Chờ thêm dữ liệu"},
+        ],
     },
     {
         "name":        "zscore_anomaly",
@@ -68,36 +67,39 @@ RULES = [
             and abs(speed - statistics.mean(history)) / statistics.stdev(history) >= 2.5
         ),
         "level":       "medium",
-        "action_type": "reroute",
-        "message":     lambda dpid, port, speed, history, **kw:
-                       f"Port s{dpid}/{port} bất thường thống kê "
-                       f"(Z={abs(speed-statistics.mean(history))/statistics.stdev(history):.1f})",
-        "root_cause":  lambda dpid, port, speed, history, **kw:
-                       f"Tốc độ {speed/1e6:.1f} Mbps lệch "
-                       f"{abs(speed-statistics.mean(history))/statistics.stdev(history):.1f} "
-                       f"độ lệch chuẩn (TB={statistics.mean(history)/1e6:.1f} Mbps). "
-                       f"Nguyên nhân: luồng mới, truyền file đột ngột, hoặc dấu hiệu tấn công sớm.",
-        "actions":     lambda dpid, port, **kw: (
-            [
-                {"id":"investigate","label":"Xem flow table","type":"INVESTIGATE","param":0,
-                 "desc":f"dump-flows s{dpid} để tìm luồng bất thường"},
-                {"id":"reroute", "label":"Chuyển hướng tạm thời","type":"REROUTE","param":0,
-                 "desc":"Đẩy lưu lượng qua uplink backup để giảm bão hòa"},
-                {"id":"qos_10",  "label":"Giới hạn phòng ngừa 10 Mbps","type":"QoS","param":10,
-                 "desc":"Ngăn leo thang nếu là tấn công"},
-                {"id":"monitor", "label":"Theo dõi thêm","type":"MONITOR","param":0,
-                 "desc":"Chờ thêm dữ liệu để xác nhận"},
-            ]
-            if port in {1, 2}
-            else [
-                {"id":"investigate","label":"Xem flow table","type":"INVESTIGATE","param":0,
-                 "desc":f"dump-flows s{dpid} để tìm luồng bất thường"},
-                {"id":"qos_10",     "label":"Giới hạn phòng ngừa 10 Mbps","type":"QoS","param":10,
-                 "desc":"Ngăn leo thang nếu là tấn công"},
-                {"id":"monitor",    "label":"Theo dõi thêm","type":"MONITOR","param":0,
-                 "desc":"Port host không có uplink dự phòng để reroute"},
-            ]
+        "action_type": "limit_bandwidth",
+        "message":     lambda dpid, port, speed, history, **kw: (
+            lambda mean, std, z: (
+                f"Tốc độ {speed/1e6:.1f} Mbps lệch {z:.1f}σ so với baseline "
+                f"(TB={mean/1e6:.1f} Mbps, SD={std/1e6:.2f} Mbps). "
+                f"Hướng: {'tăng đột biến' if speed > mean else 'giảm đột ngột'}."
+            )(
+                statistics.mean(history),
+                statistics.stdev(history),
+                abs(speed - statistics.mean(history)) / statistics.stdev(history)
+            )
         ),
+        "root_cause": lambda dpid, port, speed, history, **kw: (
+    lambda mean, std, z: (
+        f"Tốc độ {speed/1e6:.1f} Mbps lệch {z:.1f} độ lệch chuẩn so với baseline "
+        f"(TB={mean/1e6:.1f} Mbps, SD={std/1e6:.2f} Mbps). "
+        f"Đây là {'tăng' if speed > mean else 'giảm'} đột ngột bất thường. "
+        f"Nguyên nhân thường gặp: luồng dữ liệu mới xuất hiện, "
+        f"truyền file lớn đột ngột, hoặc dấu hiệu sớm của tấn công mạng."
+    )(
+        statistics.mean(history),
+        statistics.stdev(history),
+        abs(speed - statistics.mean(history)) / statistics.stdev(history)
+    )
+),
+        "actions":     lambda dpid, port, **kw: [
+            {"id":"investigate","label":"Xem flow table","type":"INVESTIGATE","param":0,
+             "desc":f"dump-flows s{dpid} để tìm luồng bất thường"},
+            {"id":"qos_10",     "label":"Giới hạn phòng ngừa 10 Mbps","type":"QoS","param":10,
+             "desc":"Ngăn leo thang nếu là tấn công"},
+            {"id":"monitor",    "label":"Theo dõi thêm","type":"MONITOR","param":0,
+             "desc":"Chờ thêm dữ liệu để xác nhận"},
+        ],
     },
     {
         "name":        "sustained_high",
@@ -106,8 +108,9 @@ RULES = [
         ),
         "level":       "high",
         "action_type": "block",
-        "message":     lambda dpid, port, speed, **kw:
-                       f"Port s{dpid}/{port} duy trì băng thông cao liên tục 3 chu kỳ",
+        "message":     lambda dpid, port, speed, history, **kw:
+                       f"Băng thông duy trì trên 15 Mbps trong 3 chu kỳ liên tiếp: "
+                       f"{[round(s/1e6,1) for s in history[-3:]]} Mbps.",
         "root_cause":  lambda dpid, port, speed, history, **kw:
                        f"Băng thông trên 15 Mbps trong 3 chu kỳ liên tiếp "
                        f"({[round(s/1e6,1) for s in history[-3:]]} Mbps). "

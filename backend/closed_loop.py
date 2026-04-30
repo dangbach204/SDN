@@ -35,7 +35,7 @@ class ClosedLoopController:
         self.policy = {
             "congestion_on_pct": 80.0,
             "congestion_off_pct": 65.0,
-            "evaluation_window_seconds": 120,
+            "evaluation_window_seconds": 180,
             "cooldown_seconds": 180,
             "retry_cooldown_seconds": 60,
             "min_confidence": 0.55,
@@ -161,7 +161,7 @@ class ClosedLoopController:
                         action_type=action_type,
                         param_mbps=action_param,
                     )
-                    verify_ok, verify_msg = _verify_action_effect(
+                    verify_ok, verify_msg = await _verify_action_effect(
                         dpid=dpid,
                         port_no=port_no,
                         action_type=action_type,
@@ -280,7 +280,7 @@ class ClosedLoopController:
             """
             SELECT dpid, port_no, AVG(speed_rx + speed_tx) AS avg_bps
             FROM port_stats
-            WHERE timestamp >= NOW() - ($1 || ' seconds')::interval
+            WHERE timestamp >= NOW() - make_interval(secs => $1)
               AND port_no != 4294967294
             GROUP BY dpid, port_no
             """,
@@ -315,7 +315,7 @@ class ClosedLoopController:
     ) -> int:
         if dpid is None or port_no is None:
             v = await conn.fetchval(
-                "SELECT COUNT(*) FROM anomalies WHERE timestamp >= NOW() - ($1 || ' seconds')::interval",
+                "SELECT COUNT(*) FROM anomalies WHERE timestamp >= NOW() - make_interval(secs => $1)",
                 seconds,
             )
             return int(v or 0)
@@ -325,7 +325,7 @@ class ClosedLoopController:
             SELECT COUNT(*)
             FROM anomalies
             WHERE dpid=$1 AND port_no=$2
-              AND timestamp >= NOW() - ($3 || ' seconds')::interval
+              AND timestamp >= NOW() - make_interval(secs => $3)
             """,
             dpid,
             port_no,
@@ -336,7 +336,7 @@ class ClosedLoopController:
     async def _port_trend_pct(self, conn, dpid: int, port_no: int) -> float:
         row = await conn.fetchrow(
             """
-            SELECT
+            SELECT  
                 AVG(CASE WHEN timestamp >= NOW() - INTERVAL '60 seconds'
                          THEN speed_rx + speed_tx END) AS recent_avg,
                 AVG(CASE WHEN timestamp < NOW() - INTERVAL '60 seconds'
@@ -631,7 +631,7 @@ class ClosedLoopController:
                 decision = "release"
                 inverse_action, inverse_param = self._inverse_action(action_type, action_param)
                 rb_ok, rb_msg = await _execute_action(dpid, port_no, inverse_action, inverse_param)
-                rb_verify, rb_verify_msg = _verify_action_effect(dpid, port_no, inverse_action, inverse_param)
+                rb_verify, rb_verify_msg = await _verify_action_effect(dpid, port_no, inverse_action, inverse_param)
                 rollback_performed = True
                 rollback_message = f"{rb_msg}; {rb_verify_msg}"
                 rolled_back += 1
@@ -647,7 +647,7 @@ class ClosedLoopController:
                 decision = "rollback"
                 inverse_action, inverse_param = self._inverse_action(action_type, action_param)
                 rb_ok, rb_msg = await _execute_action(dpid, port_no, inverse_action, inverse_param)
-                rb_verify, rb_verify_msg = _verify_action_effect(dpid, port_no, inverse_action, inverse_param)
+                rb_verify, rb_verify_msg = await _verify_action_effect(dpid, port_no, inverse_action, inverse_param)
                 rollback_performed = True
                 rollback_message = f"{rb_msg}; {rb_verify_msg}"
                 rolled_back += 1
@@ -671,7 +671,7 @@ class ClosedLoopController:
                 )
                 if alt_action:
                     ex_ok, ex_msg = await _execute_action(dpid, port_no, alt_action, alt_param)
-                    vf_ok, vf_msg = _verify_action_effect(dpid, port_no, alt_action, alt_param)
+                    vf_ok, vf_msg = await _verify_action_effect(dpid, port_no, alt_action, alt_param)
                     if ex_ok and vf_ok:
                         reoptimized += 1
                         reopt_count += 1
@@ -716,7 +716,7 @@ class ClosedLoopController:
                         decision = "rollback"
                         inverse_action, inverse_param = self._inverse_action(action_type, action_param)
                         rb_ok, rb_msg = await _execute_action(dpid, port_no, inverse_action, inverse_param)
-                        rb_verify, rb_verify_msg = _verify_action_effect(dpid, port_no, inverse_action, inverse_param)
+                        rb_verify, rb_verify_msg = await _verify_action_effect(dpid, port_no, inverse_action, inverse_param)
                         rollback_performed = True
                         rollback_message = f"{rb_msg}; {rb_verify_msg}"
                         rolled_back += 1

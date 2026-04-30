@@ -9,11 +9,9 @@ const FILTERS = [
 
 const UPLINK_PORTS = new Set([
   "1-1", // s1 port 1 -> s2
-  "1-2", // s1 port 2 -> s3
   "2-1", // s2 port 1 -> s1
   "2-2", // s2 port 2 -> s3
   "3-1", // s3 port 1 -> s2
-  "3-2", // s3 port 2 -> s1
 ])
 
 function utilColorClass(pct) {
@@ -81,11 +79,11 @@ export default function UtilizationBars({ rows, appliedLimits = {} }) {
           return (
             <div key={`${r.dpid}-${r.port_no}`} className="util-item">
               <div className="util-row">
-                <span className="util-name">
+                <span className="util-name" style={{ fontSize: 13 }}>
                   s{r.dpid} · port {r.port_no} · {capacityMbps}Mbps
                   {isUplink && <span className="badge WARN">uplink</span>}
                 </span>
-                <span className={`util-pct ${colorClass}`}>{pct.toFixed(1)}% · limit {limitText}</span>
+                <span className={`util-pct ${colorClass}`} style={{ fontSize: 13 }}>{pct.toFixed(1)}% · limit {limitText}</span>
               </div>
               <div className="util-track">
                 <div className={`util-fill ${colorClass}`} style={{ width: `${pct}%`, background: "currentColor" }} />
