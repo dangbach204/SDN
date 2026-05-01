@@ -1,15 +1,6 @@
 """
 database.py — Kết nối Neon PostgreSQL qua asyncpg
 
-Thay đổi so với bản cũ:
-  1. Bỏ partition port_stats — không cần thiết ở quy mô lab/demo,
-     gây lỗi nếu không tạo partition mỗi ngày
-  2. Bỏ bảng switches, ports — không dùng ở đâu
-  3. Bỏ bảng action_verifications — kết quả verify lưu trong control_actions
-  4. Sửa tên cột flow_stats: match_str→match (jsonb), duration→duration_seconds
-  5. Sửa enum alert_level: thêm 'high','warn','zscore' để khớp với
-     những gì monitor.py và decision_engine.py thực sự gửi lên
-  6. Bỏ cột details trong anomalies — không bao giờ được populate
 """
 
 import os
@@ -102,6 +93,12 @@ async def init_db():
                 ON port_stats(dpid, port_no, timestamp DESC)
         """)
 
+        # Add loss column if not exists (backward compatibility)
+        await conn.execute("""
+            ALTER TABLE port_stats
+            ADD COLUMN IF NOT EXISTS loss DOUBLE PRECISION DEFAULT 0
+        """)
+
         # ── flow_stats ────────────────────────────────────────────────────────
         # Cột match kiểu JSONB + GIN index để closed_loop.py query ->> hoạt động.
         # duration_seconds (không phải duration hay match_str như bản cũ).
@@ -186,6 +183,12 @@ async def init_db():
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_recommendations_actions
                 ON recommendations USING GIN (actions_json)
+        """)
+
+        # Add reason column if not exists (backward compatibility)
+        await conn.execute("""
+            ALTER TABLE recommendations
+            ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT NULL
         """)
 
         # ── closed-loop tables ────────────────────────────────────────────────

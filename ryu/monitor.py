@@ -48,8 +48,9 @@ class TrafficMonitor(app_manager.RyuApp):
         super().__init__(*args, **kwargs)
         self.mac_to_port   = {}
         self.datapaths     = {}
-        self.prev_bytes    = {}
-        self.speed_history = {}
+        self.prev_stats    = {}  # {(dpid, port): {"rx_bytes": ..., "tx_bytes": ..., "tx_packets": ..., "rx_packets": ..., "timestamp": ...}}
+        self.speed_history = {}  # {(dpid, port): [speed, speed, ...]}
+        self.prev_speed    = {}  # {(dpid, port): speed} — for detecting restart after idle
         self.monitor_thread = hub.spawn(self._monitor_loop)
 
     # Switch connect
@@ -135,12 +136,38 @@ class TrafficMonitor(app_manager.RyuApp):
         req    = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
 
+    def _get_port_capacity(self, dpid: int, port: int) -> float:
+        """Port capacity (bps) — tương tự decision_engine.py"""
+        # SW1
+        if dpid == 1:
+            if port == 1:
+                return 100e6  # uplink
+            elif 2 <= port <= 5:
+                return 50e6   # host
+
+        # SW2
+        elif dpid == 2:
+            if port in [1, 2]:
+                return 100e6  # uplink
+            elif 3 <= port <= 6:
+                return 50e6   # host
+
+        # SW3
+        elif dpid == 3:
+            if port == 1:
+                return 100e6  # uplink
+            elif 2 <= port <= 5:
+                return 50e6   # host
+
+        # fallback
+        return 100e6
+
     # Port stats reply
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def port_stats_reply_handler(self, ev):
         dpid = ev.msg.datapath.id
         now  = time.time()
-        self.prev_bytes.setdefault(dpid, {})
+        self.prev_stats.setdefault(dpid, {})
 
         rows = []
         for stat in ev.msg.body:
@@ -149,27 +176,100 @@ class TrafficMonitor(app_manager.RyuApp):
                 continue
 
             rx, tx = stat.rx_bytes, stat.tx_bytes
-            speed_rx = speed_tx = 0.0
-            if port_no in self.prev_bytes[dpid]:
-                prev_rx, prev_tx, prev_t = self.prev_bytes[dpid][port_no]
+            rx_packets, tx_packets = stat.rx_packets, stat.tx_packets
+            
+            speed_rx = speed_tx = loss = 0.0
+            key = (dpid, port_no)
+            
+            # ── Tính delta từ previous state ─────────────────────────────
+            if key in self.prev_stats[dpid]:
+                prev = self.prev_stats[dpid][key]
+                prev_rx = prev["rx_bytes"]
+                prev_tx = prev["tx_bytes"]
+                prev_rx_packets = prev["rx_packets"]
+                prev_tx_packets = prev["tx_packets"]
+                prev_t = prev["timestamp"]
+                
                 dt = now - prev_t
                 if dt > 0:
-                    speed_rx = (rx - prev_rx) * 8 / dt
-                    speed_tx = (tx - prev_tx) * 8 / dt
-            self.prev_bytes[dpid][port_no] = (rx, tx, now)
+                    # ── Xử lý counter reset / overflow ──────────────────
+                    delta_rx = rx - prev_rx
+                    delta_tx = tx - prev_tx
+                    
+                    # Nếu counter bị reset (âm) → bỏ sample này
+                    if delta_rx < 0 or delta_tx < 0:
+                        self.prev_stats[dpid][key] = {
+                            "rx_bytes": rx, "tx_bytes": tx,
+                            "rx_packets": rx_packets, "tx_packets": tx_packets,
+                            "timestamp": now
+                        }
+                        continue
+                    
+                    # ── Tính speed (bps) ──────────────────────────────
+                    speed_rx = delta_rx * 8 / dt
+                    speed_tx = delta_tx * 8 / dt
+                    
+                    # ── Clamp giá trị bất thường (vượt 120% capacity) ──
+                    capacity = self._get_port_capacity(dpid, port_no)
+                    if speed_rx > capacity * 1.2:
+                        speed_rx = capacity
+                    if speed_tx > capacity * 1.2:
+                        speed_tx = capacity
+                    
+                    # ── Ignore đúng 1 sample đầu sau idle (tránh spike) ──
+                    prev_spd = self.prev_speed.get(key, None)
+                    if prev_spd == 0 and (speed_rx + speed_tx) > 0:
+                        self.prev_speed[key] = speed_rx + speed_tx
+                        continue
 
-            rows.append({
-                "timestamp": now,
-                "dpid":      dpid,
-                "port_no":   port_no,
-                "rx_bytes":  rx,
-                "tx_bytes":  tx,
-                "speed_rx":  speed_rx,
-                "speed_tx":  speed_tx,
-            })
-            self._check_anomaly(dpid, port_no, speed_rx, speed_tx, now)
+                    # ── Smoothing: moving average 3 samples ─────────────
+                    history = self.speed_history.setdefault(key, [])
+                    speed = max(speed_rx, speed_tx)
 
-        if rows:
+                    history.append(speed)
+                    if len(history) > 3:
+                        history.pop(0)
+
+                    # Lấy average của 3 sample gần nhất
+                    if len(history) >= 2:
+                        speed = sum(history) / len(history)
+
+                    # ── Tính packet loss ─────────────────────────────────
+                    delta_rx_packets = rx_packets - prev_rx_packets
+                    delta_tx_packets = tx_packets - prev_tx_packets
+
+                    if delta_tx_packets > 0:
+                        packet_loss = (delta_tx_packets - delta_rx_packets) / delta_tx_packets
+                        loss = max(0, min(packet_loss * 100, 100))  # Clamp 0-100%
+
+                    rows.append({
+                        "timestamp": now,
+                        "dpid":      dpid,
+                        "port_no":   port_no,
+                        "rx_bytes":  rx,
+                        "tx_bytes":  tx,
+                        "speed_rx":  speed_rx,
+                        "speed_tx":  speed_tx,
+                        "loss":      loss,
+                    })
+
+                    self._check_anomaly(dpid, port_no, speed, now)
+            
+            # Lưu current state
+            self.prev_stats[dpid][key] = {
+                "rx_bytes": rx, "tx_bytes": tx,
+                "rx_packets": rx_packets, "tx_packets": tx_packets,
+                "timestamp": now
+            }
+            
+            # Cập nhật prev_speed để detect idle
+            self.prev_speed[key] = speed_rx + speed_tx
+
+        print(f"[DEBUG] rows={len(rows)} dpid={dpid}")
+        if not rows:
+            print(f"[WARN] No rows generated for s{dpid}")
+        else:
+            print(f"[POST] sending {len(rows)} rows")
             _post("/internal/port_stats", {"rows": rows})
 
         print(f"\n[Port Stats] s{dpid} — {time.strftime('%H:%M:%S')} — {len(rows)} ports")
@@ -205,12 +305,10 @@ class TrafficMonitor(app_manager.RyuApp):
         print(f"  [Flow Stats] s{dpid}: {len(rows)} flows")
 
     # Anomaly detection
-    def _check_anomaly(self, dpid, port_no, speed_rx, speed_tx, now):
-        key     = (dpid, port_no)
+    def _check_anomaly(self, dpid, port_no, speed, now):
+        """Detect anomaly từ smoothed speed"""
+        key = (dpid, port_no)
         history = self.speed_history.setdefault(key, [])
-
-        # FIX: rx+tx thay vì max() — nhất quán với closed_loop.py
-        speed = speed_rx + speed_tx
 
         anomaly = None
         if speed >= THRESHOLD_HIGH:
@@ -242,6 +340,4 @@ class TrafficMonitor(app_manager.RyuApp):
                 "message":   msg,
             })
 
-        history.append(speed)
-        if len(history) > HISTORY_MAX_LEN:
-            history.pop(0)
+        # history đã được update trong port_stats_reply_handler

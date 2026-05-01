@@ -3,7 +3,7 @@
 # Dùng trong môi trường dev/lab với Mininet
 #
 # Yêu cầu:
-#   - File .env đã được tạo từ .env.example
+#   - File .env đã được tạo
 #   - Mininet, Ryu, Python 3.9+, Node.js 18+ đã được cài
 #   - Đang chạy với quyền sudo (cho Mininet)
 #
@@ -44,7 +44,7 @@ sleep 1
 # ── 2. Cài dependencies nếu chưa có ──────────────────────────────
 echo "[2/5] Kiểm tra Python dependencies..."
 pip install -q -r backend/requirements.txt
-pip install -q -r ryu/requirements.txt
+pip install ryu
 
 echo "[2/5] Kiểm tra Node.js dependencies..."
 (cd frontend && npm install --silent)
@@ -61,7 +61,7 @@ sleep 3
 
 # ── 4. FastAPI Backend ────────────────────────────────────────────
 echo "[4/5] Khởi động FastAPI backend (port 8000)..."
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 \
+uvicorn main:app --host 0.0.0.0 --port 8000 \
     > /tmp/fastapi.log 2>&1 &
 FASTAPI_PID=$!
 echo "      PID=$FASTAPI_PID, log: /tmp/fastapi.log"

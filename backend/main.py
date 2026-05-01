@@ -7,9 +7,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 
-from database import init_db
-from decision_engine import DecisionEngine
-from routers import stats, anomalies, recommendations, internal
+from .database import init_db
+from .decision_engine import DecisionEngine
+from .routers import stats, anomalies, recommendations, internal
 
 
 @asynccontextmanager

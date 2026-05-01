@@ -2,7 +2,7 @@
 routers/anomalies.py
 """
 from fastapi import APIRouter
-from database import get_pool
+from ..database import get_pool
 
 router = APIRouter(tags=["anomalies"])
 

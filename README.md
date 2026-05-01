@@ -151,12 +151,22 @@ mininet> h3 ping 10.0.0.4 -i 0.1
 
 ## Ngưỡng cảnh báo (decision_engine.py)
 
-| Rule           | Điều kiện                          | Level  | Action mặc định |
-| -------------- | ---------------------------------- | ------ | --------------- |
-| high_bandwidth | speed ≥ 20 Mbps                    | HIGH   | QoS             |
-| warn_bandwidth | 10 ≤ speed < 20 Mbps               | WARN   | MONITOR         |
-| zscore_anomaly | \|Z-score\| ≥ 2.5                  | ZSCORE | INVESTIGATE     |
-| sustained_high | ≥ 15 Mbps trong 3 chu kỳ liên tiếp | HIGH   | BLOCK           |
+Hệ thống cảnh báo dựa trên **utilization %** của port (capacity = 1 Gbps):
+
+| Mức         | Điều kiện                              | Mô Tả                      | Hành động              |
+| ----------- | -------------------------------------- | -------------------------- | ---------------------- |
+| **🟢 LOW**  | Util < 40%                             | Bình thường, không đáng lo | Không can thiệp        |
+| **🟡 WARN** | 40% ≤ Util < 70% **và** speed ≥ 5 Mbps | Tải đáng kể, cần theo dõi  | Giám sát (MONITOR)     |
+| **🔴 HIGH** | Util ≥ 70% **và** speed ≥ 20 Mbps      | Nguy cơ nghẽn mạng         | Giới hạn QoS hoặc chặn |
+| **🔴 HIGH** | Z-score ≥ 2.5                          | Tăng đột biến bất thường   | Giới hạn QoS           |
+
+**Công thức:** `utilization = (speed / 1Gbps) × 100%`
+
+**Quy tắc cụ thể:**
+
+- `high_utilization_risk`: Util ≥ 70% AND speed ≥ 20 Mbps → **HIGH** ⚠️
+- `zscore_spike`: Z-score ≥ 2.5 (tăng > 2.5σ so với baseline) → **HIGH** ⚠️
+- `moderate_load`: 40% ≤ Util < 70% AND speed ≥ 5 Mbps → **WARN** ⚠️
 
 ## Troubleshooting
 

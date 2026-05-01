@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from database import get_pool
+from ..database import get_pool
 
 router = APIRouter(tags=["recommendations"])
 
@@ -132,7 +132,7 @@ async def _read_recent_speed_mbps(dpid: int, port_no: int) -> Optional[float]:
     async with pool.acquire() as conn:
         speed_bps = await conn.fetchval(
             """
-            SELECT AVG(speed_rx + speed_tx)
+            SELECT AVG(GREATEST(speed_rx, speed_tx))
             FROM port_stats
             WHERE dpid=$1 AND port_no=$2
               AND timestamp >= NOW() - INTERVAL '120 seconds'
@@ -208,9 +208,9 @@ async def list_recommendations():
                        ELSE 'MONITOR'
                    END AS action_type,
                    message,
-                   root_cause,
                    actions_json::text AS actions_json,
-                   status, chosen_action
+                   status, chosen_action,
+                   COALESCE(reason, 'unknown') AS reason
             FROM recommendations
             ORDER BY created_at DESC
             LIMIT 50

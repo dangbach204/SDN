@@ -206,12 +206,6 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
               {/* Body */}
               {expanded[rec.id] && (
                 <div className="rec-body">
-                  {/* Root cause */}
-                  <div className="cause-box">
-                    <div className="cause-label">🔍 Phân tích nguyên nhân</div>
-                    <div className="cause-text">{rec.root_cause || "Chưa có phân tích"}</div>
-                  </div>
-
                   {/* Actions */}
                   {isPending && actions.length > 0 && (
                     <>

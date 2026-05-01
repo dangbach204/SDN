@@ -1,14 +1,9 @@
-"""
-routers/control.py
-API endpoints for autonomous closed-loop controller state and policy.
-"""
-
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from database import get_pool
+from .database import get_pool
 
 router = APIRouter(tags=["control"])
 

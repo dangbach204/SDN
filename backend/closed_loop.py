@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from adaptive_routing import capacity_mbps, choose_reroute_port, is_uplink_port, mac_to_switch
-from database import get_pool
+from .database import get_pool
 from routers.recommendations import _execute_action, _verify_action_effect
 
 

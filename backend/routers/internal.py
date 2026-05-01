@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 
-from database import get_pool
+from ..database import get_pool
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -23,6 +23,7 @@ class PortStatRow(BaseModel):
     tx_bytes:  int = 0
     speed_rx:  float = 0.0
     speed_tx:  float = 0.0
+    loss:      float = 0.0  # packet loss %
 
 class PortStatsBatch(BaseModel):
     rows: List[PortStatRow]
@@ -80,10 +81,10 @@ async def ingest_port_stats(batch: PortStatsBatch):
 
         await conn.executemany(
             """INSERT INTO port_stats
-               (timestamp,dpid,port_no,rx_bytes,tx_bytes,speed_rx,speed_tx)
-               VALUES (to_timestamp($1),$2,$3,$4,$5,$6,$7)""",
+               (timestamp,dpid,port_no,rx_bytes,tx_bytes,speed_rx,speed_tx,loss)
+               VALUES (to_timestamp($1),$2,$3,$4,$5,$6,$7,$8)""",
             [(r.timestamp, r.dpid, r.port_no,
-              r.rx_bytes, r.tx_bytes, r.speed_rx, r.speed_tx)
+              r.rx_bytes, r.tx_bytes, r.speed_rx, r.speed_tx, r.loss)
              for r in batch.rows]
         )
     return {"inserted": len(batch.rows)}
