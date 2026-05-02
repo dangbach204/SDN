@@ -1,10 +1,10 @@
 """
 routers/internal.py
 Các endpoint nội bộ chỉ dành cho Ryu gọi vào.
-Không expose ra ngoài (có thể thêm API key sau).
 """
 import ast
 import json
+import asyncpg
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
@@ -14,7 +14,7 @@ from ..database import get_pool
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
-# ── Port stats ───────────────────────────────────────────────────────
+# Port stats
 class PortStatRow(BaseModel):
     timestamp: float
     dpid:      int
@@ -23,7 +23,7 @@ class PortStatRow(BaseModel):
     tx_bytes:  int = 0
     speed_rx:  float = 0.0
     speed_tx:  float = 0.0
-    loss:      float = 0.0  # packet loss %
+    # `loss` removed: not present in DB schema
 
 class PortStatsBatch(BaseModel):
     rows: List[PortStatRow]
@@ -79,18 +79,31 @@ async def ingest_port_stats(batch: PortStatsBatch):
             [(dpid, port_no) for dpid, port_no in ports]
         )
 
-        await conn.executemany(
-            """INSERT INTO port_stats
-               (timestamp,dpid,port_no,rx_bytes,tx_bytes,speed_rx,speed_tx,loss)
-               VALUES (to_timestamp($1),$2,$3,$4,$5,$6,$7,$8)""",
-            [(r.timestamp, r.dpid, r.port_no,
-              r.rx_bytes, r.tx_bytes, r.speed_rx, r.speed_tx, r.loss)
-             for r in batch.rows]
-        )
+        try:
+            await conn.executemany(
+                """INSERT INTO port_stats
+                   (timestamp,dpid,port_no,rx_bytes,tx_bytes,speed_rx,speed_tx)
+                   VALUES (to_timestamp($1),$2,$3,$4,$5,$6,$7)""",
+                [(r.timestamp, r.dpid, r.port_no,
+                  r.rx_bytes, r.tx_bytes, r.speed_rx, r.speed_tx)
+                 for r in batch.rows]
+            )
+        except asyncpg.exceptions.CheckViolationError:
+            # Partitioning on the DB may reject rows whose timestamps
+            # fall outside existing partitions. Fallback by inserting
+            # rows using the server-side default timestamp (NOW()).
+            print('[DB] Partition check failed — falling back to server timestamp')
+            await conn.executemany(
+                """INSERT INTO port_stats
+                   (dpid,port_no,rx_bytes,tx_bytes,speed_rx,speed_tx)
+                   VALUES ($1,$2,$3,$4,$5,$6)""",
+                [(r.dpid, r.port_no, r.rx_bytes, r.tx_bytes, r.speed_rx, r.speed_tx)
+                 for r in batch.rows]
+            )
     return {"inserted": len(batch.rows)}
 
 
-# ── Flow stats ───────────────────────────────────────────────────────
+# Flow stats
 class FlowStatRow(BaseModel):
     timestamp: float
     dpid:      int
@@ -127,7 +140,7 @@ async def ingest_flow_stats(batch: FlowStatsBatch):
     return {"inserted": len(batch.rows)}
 
 
-# ── Anomalies ────────────────────────────────────────────────────────
+# Anomalies
 class AnomalyIn(BaseModel):
     timestamp: float
     dpid:      int

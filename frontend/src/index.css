@@ -164,7 +164,7 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
 
 .rec-filters {
   display:grid;
-  grid-template-columns:minmax(220px, 1.1fr) repeat(2, minmax(0, 1fr));
+  grid-template-columns:minmax(220px, 1.1fr) repeat(3, minmax(0, 1fr));
   gap:12px;
   margin-bottom:16px;
   padding:12px;
@@ -217,6 +217,54 @@ body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--t
   border-color:var(--blue-m);
   box-shadow:0 0 0 3px var(--blue-l);
 }
+.rec-date-filter {
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  min-width:0;
+}
+.rec-date-toggle {
+  width:fit-content;
+}
+.rec-date-popover {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  padding:8px 10px;
+  border:1px solid var(--border2);
+  border-radius:10px;
+  background:var(--surface);
+  box-shadow:var(--shadow);
+  width:fit-content;
+  max-width:100%;
+}
+.rec-date-popover input {
+  border:1px solid var(--border2);
+  border-radius:8px;
+  padding:6px 10px;
+  font:inherit;
+  font-size:13px;
+  color:var(--text);
+  background:var(--surface);
+}
+.rec-date-popover input:focus {
+  outline:none;
+  border-color:var(--blue-m);
+  box-shadow:0 0 0 3px var(--blue-l);
+}
+.rec-date-clear {
+  padding:6px 10px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:var(--bg);
+  color:var(--text2);
+  font:inherit;
+  font-size:12px;
+  cursor:pointer;
+}
+.rec-date-clear:hover { background:var(--surface); border-color:var(--blue-m); }
 
 /* ── Utilization bars ────────────────────────────────────────────── */
 .util-list  { display:flex; flex-direction:column; gap:12px; }

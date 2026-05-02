@@ -13,6 +13,8 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
   const [switchFilter,    setSwitchFilter]    = useState("all")
   const [ethFilter,       setEthFilter]       = useState("all")
   const [switchQuery,     setSwitchQuery]     = useState("")
+  const [dateFilter,      setDateFilter]      = useState("")
+  const [datePickerOpen,  setDatePickerOpen]  = useState(false)
   const [expanded,        setExpanded]        = useState({})
   const [selectedActions, setSelectedActions] = useState({})
   const [loading,         setLoading]         = useState({})
@@ -42,6 +44,7 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
       if (filter !== "all" && rec.status !== filter) return false
       if (switchFilter !== "all" && String(rec.dpid) !== switchFilter) return false
       if (ethFilter !== "all" && String(rec.port_no) !== ethFilter) return false
+      if (dateFilter && String(rec.created_date || "") !== dateFilter) return false
       if (query) {
         const swLabel = `s${rec.dpid}`.toLowerCase()
         const dpidText = String(rec.dpid).toLowerCase()
@@ -49,7 +52,7 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
       }
       return true
     })
-  }, [ethFilter, filter, recs, switchFilter, switchQuery])
+  }, [dateFilter, ethFilter, filter, recs, switchFilter, switchQuery])
 
   function toggleExpand(id) {
     setExpanded(e => ({ ...e, [id]: !e[id] }))
@@ -76,16 +79,12 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
         body:    JSON.stringify(body),
       })
       const data = await res.json()
-      const lines = []
-      if (data.action) lines.push(`Thực thi: ${data.action}`)
-      if (data.verification) lines.push(`Xác minh: ${data.verification}`)
-      if (typeof data.before_mbps === "number" && typeof data.after_mbps === "number") {
-        lines.push(`BW trước/sau: ${data.before_mbps.toFixed(2)} -> ${data.after_mbps.toFixed(2)} Mbps`)
-      }
+      const actionText = String(data.action || data.verification || "").trim()
 
-      if (lines.length > 0) {
-        const prefix = data.result === "ok" ? "Kết quả" : "Thất bại"
-        alert(`${prefix}:\n${lines.join("\n")}`)
+      if (data.result === "ok") {
+        alert(actionText ? `Thành công.\n${actionText}` : "Thành công.")
+      } else {
+        alert(actionText ? `Thất bại.\n${actionText}` : "Thất bại.")
       }
       await onRefresh()
     } catch {
@@ -163,6 +162,38 @@ export default function Recommendations({ recs, pendingCount, onRefresh }) {
                     onClick={() => setEthFilter(String(portNo))}
                   >eth{portNo}</button>
                 ))}
+              </div>
+            </div>
+
+            <div className="rec-filter-group">
+              <div className="rec-filter-label">Ngày</div>
+              <div className="rec-date-filter">
+                <button
+                  type="button"
+                  className={`sw-tab rec-date-toggle ${dateFilter ? "active" : ""}`}
+                  onClick={() => setDatePickerOpen(v => !v)}
+                >
+                  {dateFilter ? `Đang lọc: ${dateFilter}` : "Chọn ngày"}
+                </button>
+                {(datePickerOpen || dateFilter) && (
+                  <div className="rec-date-popover">
+                    <input
+                      type="date"
+                      value={dateFilter}
+                      onChange={e => setDateFilter(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="rec-date-clear"
+                      onClick={() => {
+                        setDateFilter("")
+                        setDatePickerOpen(false)
+                      }}
+                    >
+                      Xóa lọc
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

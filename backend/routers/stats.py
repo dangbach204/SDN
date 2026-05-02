@@ -74,7 +74,6 @@ async def port_stats():
             SELECT dpid, port_no,
                    AVG(speed_rx) AS avg_rx,
                    AVG(speed_tx) AS avg_tx,
-                   AVG(loss) AS avg_loss,
                    MAX(speed_rx + speed_tx) AS peak
             FROM port_stats
             WHERE timestamp >= NOW() - INTERVAL '60 seconds'
@@ -92,7 +91,6 @@ async def port_stats():
         d["capacity_mbps"]  = cap_mbps
         d["is_uplink"]      = (d["dpid"], d["port_no"]) in UPLINK_PORTS
         d["utilization_pct"] = round(avg_total / (cap_mbps * 1e6) * 100, 1) if cap_mbps > 0 else 0.0
-        d["avg_loss"]       = round(d.get("avg_loss") or 0, 1)  # packet loss %
         result.append(d)
     return result
 
@@ -104,7 +102,7 @@ async def history(dpid: int, port_no: int):
     async with pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT EXTRACT(EPOCH FROM timestamp) AS timestamp,
-                   speed_rx, speed_tx, loss
+                   speed_rx, speed_tx
             FROM port_stats
             WHERE dpid=$1 AND port_no=$2 AND port_no != 4294967294
             ORDER BY timestamp DESC LIMIT 20
@@ -184,7 +182,7 @@ async def flow_metrics(src: str, dst: str):
 
     try:
         # chạy ping từ host src
-        cmd = f"echo '{src} ping -c 5 {dst}' | sudo python3 ~/mininet/util/m"
+        cmd = f"sudo python3 ~/mininet/util/m {src} ping -c 5 {dst_ip}"
         result = subprocess.check_output(cmd, shell=True, text=True)
 
         # parse latency

@@ -1,7 +1,3 @@
-"""
-main.py — FastAPI entry point
-Khởi động: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-"""
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

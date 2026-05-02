@@ -68,15 +68,16 @@ export default function BandwidthChart({ portStats }) {
     return () => chartRef.current?.destroy()
   }, [])
 
-  // Fetch history khi switch/port thay đổi
+  // Fetch history khi switch/port thay đổi hoặc khi dashboard refresh dữ liệu nền
   useEffect(() => {
     if (!selPort || !chartRef.current) return
     setLoading(true)
+    let cancelled = false
 
     fetch(`${API}/api/history/${selSw}/${selPort}`)
       .then(r => r.json())
       .then(data => {
-        if (!chartRef.current) return
+        if (cancelled || !chartRef.current) return
         const labels = data.map(d =>
           new Date(d.timestamp * 1000).toLocaleTimeString("vi", { hour:"2-digit", minute:"2-digit", second:"2-digit" }))
         chartRef.current.data = {
@@ -107,8 +108,14 @@ export default function BandwidthChart({ portStats }) {
         chartRef.current.update()
       })
       .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [selSw, selPort])
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selSw, selPort, portStats])
 
   return (
     <div className="card">

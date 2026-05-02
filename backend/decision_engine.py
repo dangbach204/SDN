@@ -16,12 +16,14 @@ def get_port_capacity(dpid: int, port: int) -> float:
         return 100e6      # uplink 100 Mbps
     return 50e6           # host port 50 Mbps
 
-# Ngưỡng
-UTIL_HIGH        = 60.0   # %
-UTIL_WARN        = 40.0   # %
-SPEED_HIGH_MIN   = 20e6   # bps — 20 Mbps
-SPEED_WARN_MIN   = 5e6    # bps — 5 Mbps
-ZSCORE_THRESHOLD = 2.5
+# Alert thresholds (utilization-based only)
+UTIL_HIGH  = 60.0   # % — HIGH alert threshold
+UTIL_WARN  = 40.0   # % — WARN alert threshold
+
+# Note: Speed and z-score are kept for monitoring/analysis but NOT used in alert decisions
+# SPEED_HIGH_MIN   = 20e6   # bps — 20 Mbps (deprecated, kept for reference)
+# SPEED_WARN_MIN   = 5e6    # bps — 5 Mbps (deprecated, kept for reference)
+# ZSCORE_THRESHOLD = 2.5    # (deprecated, kept for reference)
 
 # Helpers
 def _calc_util(speed: float, capacity: float) -> float:
@@ -44,32 +46,28 @@ def _trend(history: list) -> str:
         return "CHƯA RÕ"
     return "TĂNG" if history[-1] >= history[-2] else "GIẢM"
 
-# Conditions
-def _is_high(speed_avg: float, speed_max: float,
-             util_avg: float, util_max: float,
-             history: list) -> tuple:
+# Alert Classification (utilization-based only)
+def _get_alert_level(util_avg: float, util_max: float) -> Tuple[str, str]:
     """
-    HIGH nếu:
-      (1) util_max >= UTIL_HIGH VÀ speed_max >= SPEED_HIGH_MIN
-      (2) HOẶC Z-score >= ZSCORE_THRESHOLD
+    Determine alert level based ONLY on utilization percentage.
+    
+    Args:
+        util_avg: Average utilization (%)
+        util_max: Maximum utilization (%)
+    
+    Returns:
+        Tuple of (level, reason) where level is 'high', 'warn', or None
     """
-    # Điều kiện 1: congestion
-    if speed_max >= SPEED_HIGH_MIN and util_max >= UTIL_HIGH:
-        return True, "congestion"
-
-    # Điều kiện 2: z-score spike
-    z = _zscore(speed_avg, history)
-    if z >= ZSCORE_THRESHOLD and speed_avg >= SPEED_WARN_MIN:
-        return True, f"spike (Z={z:.2f}σ)"
-
-    return False, None
-
-def _is_warn(speed_avg: float, util_avg: float) -> bool:
-    """
-    WARN nếu:
-      40% ≤ util_avg < UTIL_HIGH VÀ speed_avg ≥ 5 Mbps
-    """
-    return speed_avg >= SPEED_WARN_MIN and UTIL_WARN <= util_avg < UTIL_HIGH
+    # HIGH: utilization >= 60%
+    if util_max >= UTIL_HIGH:
+        return "high", f"high_utilization ({util_max:.1f}%)"
+    
+    # WARN: 40% <= utilization < 60%
+    if util_avg >= UTIL_WARN:
+        return "warn", f"moderate_utilization ({util_avg:.1f}%)"
+    
+    # LOW: no alert (handled separately)
+    return None, None
 
 
 # Decision Engine
@@ -115,28 +113,23 @@ class DecisionEngine:
             util_avg = _calc_util(avg_speed, capacity)
             util_max = _calc_util(max_speed, capacity)
 
+            # Calculate z-score for monitoring/analysis (not used in alert decision)
+            z_score = _zscore(avg_speed, history)
+
             level       = None
             action_type = None
             message     = None
-            root_cause  = None
             actions     = []
 
-            # Phân loại
-            high, reason = _is_high(avg_speed, max_speed,
-                                    util_avg, util_max, history)
+            # Determine alert level based ONLY on utilization
+            alert_level, reason = _get_alert_level(util_avg, util_max)
 
-            if high:
+            if alert_level == "high":
                 level       = "high"
                 action_type = "limit_bandwidth"
                 message = (
-                    f"s{dpid}/eth{port}: avg={avg_speed/1e6:.1f} Mbps "
-                    f"max={max_speed/1e6:.1f} Mbps "
-                    f"({util_max:.1f}%) — HIGH ({reason})"
-                )
-                root_cause = (
-                    f"avg {avg_speed/1e6:.1f} Mbps, max {max_speed/1e6:.1f} Mbps "
-                    f"({util_max:.1f}% capacity). "
-                    f"Lịch sử: {_hist_str(history)} Mbps, xu hướng: {_trend(history)}."
+                    f"s{dpid}/eth{port}: {avg_speed/1e6:.1f} Mbps ({util_max:.1f}%) — HIGH ALERT\n"
+                    f"  Reason: {reason} | Z-score: {z_score:.2f}σ"
                 )
                 actions = [
                     {"id": "qos_10", "label": "Giới hạn 10 Mbps",
@@ -150,17 +143,12 @@ class DecisionEngine:
                      "desc": "DROP flow — dùng khi nghi ngờ tấn công"},
                 ]
 
-            elif _is_warn(avg_speed, util_avg):
+            elif alert_level == "warn":
                 level       = "medium"
                 action_type = "monitor"
                 message = (
-                    f"s{dpid}/eth{port}: {avg_speed/1e6:.1f} Mbps "
-                    f"({util_avg:.1f}%) — WARN"
-                )
-                root_cause = (
-                    f"Băng thông {avg_speed/1e6:.1f} Mbps ({util_avg:.1f}% capacity) "
-                    f"trong vùng cảnh báo ({UTIL_WARN}–{UTIL_HIGH}%). "
-                    f"Lịch sử: {_hist_str(history)} Mbps, xu hướng: {_trend(history)}."
+                    f"s{dpid}/eth{port}: {avg_speed/1e6:.1f} Mbps ({util_avg:.1f}%) — WARN\n"
+                    f"  Reason: {reason} | Z-score: {z_score:.2f}σ"
                 )
                 actions = [
                     {"id": "monitor", "label": "Theo dõi thêm",
@@ -177,29 +165,27 @@ class DecisionEngine:
                      "desc": "Giới hạn nhẹ để tránh vượt ngưỡng HIGH"},
                 ]
 
-            # Insert nếu có level
             if level:
                 async with pool.acquire() as conn:
-                    existing = await conn.fetchval("""
-                        SELECT id FROM recommendations
-                        WHERE dpid=$1 AND port_no=$2 AND action_type=$3
-                          AND status='pending'
-                          AND created_at >= NOW() - INTERVAL '120 seconds'
-                    """, dpid, port, action_type)
+                    inserted = await conn.fetchval("""
+                        INSERT INTO recommendations
+                            (dpid, port_no, level, action_type, message, actions_json, status)
+                        SELECT $1, $2, $3::alert_level, $4::action_type_enum, $5, $6::jsonb, 'pending'
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM recommendations
+                            WHERE dpid=$1 AND port_no=$2
+                              AND action_type=$4::action_type_enum
+                              AND status='pending'
+                              AND created_at >= NOW() - INTERVAL '120 seconds'
+                        )
+                        RETURNING id
+                    """,
+                    dpid, port,
+                    level, action_type,
+                    message,
+                    json.dumps(actions, ensure_ascii=False))
 
-                if not existing:
-                    async with pool.acquire() as conn:
-                        await conn.execute("""
-                            INSERT INTO recommendations
-                                (created_at, dpid, port_no, level, action_type,
-                                 message, root_cause, actions_json, status)
-                            VALUES
-                                (NOW(), $1, $2, $3, $4, $5, $6, $7::jsonb, 'pending')
-                        """, dpid, port,
-                             level, action_type,
-                             message, root_cause or "",
-                             json.dumps(actions, ensure_ascii=False))
-
+                if inserted:
                     print(f"  [{level.upper()}] {message}")
                     new_recs += 1
 

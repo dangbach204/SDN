@@ -60,13 +60,12 @@ export default function PortTable({ rows, appliedLimits = {}, appliedBlocks = {}
             <th>TX (Mbps)</th>
             <th>Peak</th>
             <th>Util%</th>
-            <th>Loss%</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {filtered.length === 0 && (
-            <tr><td colSpan={8} className="empty">Chưa có dữ liệu</td></tr>
+            <tr><td colSpan={7} className="empty">Chưa có dữ liệu</td></tr>
           )}
           {filtered.map(r => {
             const rx  = ((r.avg_rx  || 0) / 1e6).toFixed(2)
@@ -98,7 +97,7 @@ export default function PortTable({ rows, appliedLimits = {}, appliedBlocks = {}
                     <div className="pct-bar">
                       <div className="pct-fill" style={{ width: `${pct}%`, background: col }} />
                     </div>
-                    <span className="mono" style={{ color: col, minWidth: 118, fontSize: 10 }}>
+                    <span className="mono" style={{ color: col, minWidth: 118, fontSize: 13 }}>
                       {pct.toFixed(0)}%
                       {" · "}
                       {isBlocked ? (
@@ -108,9 +107,6 @@ export default function PortTable({ rows, appliedLimits = {}, appliedBlocks = {}
                       )}
                     </span>
                   </div>
-                </td>
-                <td className="mono" style={{ color: (r.avg_loss || 0) > 5 ? "var(--red)" : "var(--green)" }}>
-                  {((r.avg_loss || 0).toFixed(1))}%
                 </td>
                 <td>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

@@ -1,10 +1,15 @@
 """
 database.py — Kết nối Neon PostgreSQL qua asyncpg
 
+Chỉ giữ các bảng phục vụ chức năng mô tả trong description.md:
+  - port_stats    : lưu stats băng thông từ Ryu
+  - flow_stats    : lưu flow entries từ Ryu
+  - anomalies     : lưu cảnh báo phát hiện bất thường
+  - recommendations: lưu khuyến nghị từ DecisionEngine
+  - latency_stats : lưu kết quả đo độ trễ
 """
 
 import os
-from datetime import date, timedelta
 from typing import Optional
 
 import asyncpg
@@ -16,7 +21,7 @@ DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 if not DATABASE_URL:
     raise RuntimeError(
         "DATABASE_URL chưa được đặt.\n"
-        "Tạo file .env từ .env.example và điền connection string từ Neon."
+        "Tạo file .env và điền connection string từ Neon."
     )
 
 _pool: Optional[asyncpg.Pool] = None
@@ -30,18 +35,16 @@ async def get_pool() -> asyncpg.Pool:
 
 
 async def init_db():
-    """Tạo schema trên Neon PostgreSQL nếu chưa tồn tại."""
     pool = await get_pool()
     async with pool.acquire() as conn:
 
-        # ── Enum types ────────────────────────────────────────────────────────
-        # alert_level: khớp với giá trị thực tế từ monitor.py và decision_engine.py
+        # Enum types
         await conn.execute("""
             DO $$ BEGIN
-                CREATE TYPE alert_level AS ENUM ('low', 'medium', 'high', 'warn', 'zscore');
+                CREATE TYPE alert_level AS ENUM
+                    ('low', 'medium', 'high', 'warn', 'zscore');
             EXCEPTION WHEN duplicate_object THEN null; END $$;
         """)
-        # Thêm giá trị mới vào enum nếu đang upgrade từ schema cũ
         for val in ('warn', 'zscore'):
             await conn.execute(f"""
                 DO $$ BEGIN
@@ -68,20 +71,17 @@ async def init_db():
             EXCEPTION WHEN duplicate_object THEN null; END $$;
         """)
 
-        # ── port_stats ────────────────────────────────────────────────────────
-        # Bỏ PARTITION — đơn giản hóa, đủ cho quy mô lab/demo.
-        # Nếu cần partition sau này: thêm PARTITION BY RANGE(timestamp)
-        # và job tạo partition hàng ngày.
+        # port_stats
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS port_stats (
-                id         BIGSERIAL PRIMARY KEY,
-                timestamp  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                dpid       BIGINT NOT NULL,
-                port_no    INTEGER NOT NULL,
-                rx_bytes   BIGINT NOT NULL DEFAULT 0,
-                tx_bytes   BIGINT NOT NULL DEFAULT 0,
-                speed_rx   DOUBLE PRECISION NOT NULL DEFAULT 0,
-                speed_tx   DOUBLE PRECISION NOT NULL DEFAULT 0
+                id        BIGSERIAL PRIMARY KEY,
+                timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                dpid      BIGINT NOT NULL,
+                port_no   INTEGER NOT NULL,
+                rx_bytes  BIGINT NOT NULL DEFAULT 0,
+                tx_bytes  BIGINT NOT NULL DEFAULT 0,
+                speed_rx  DOUBLE PRECISION NOT NULL DEFAULT 0,
+                speed_tx  DOUBLE PRECISION NOT NULL DEFAULT 0
             )
         """)
         await conn.execute("""
@@ -93,15 +93,7 @@ async def init_db():
                 ON port_stats(dpid, port_no, timestamp DESC)
         """)
 
-        # Add loss column if not exists (backward compatibility)
-        await conn.execute("""
-            ALTER TABLE port_stats
-            ADD COLUMN IF NOT EXISTS loss DOUBLE PRECISION DEFAULT 0
-        """)
-
-        # ── flow_stats ────────────────────────────────────────────────────────
-        # Cột match kiểu JSONB + GIN index để closed_loop.py query ->> hoạt động.
-        # duration_seconds (không phải duration hay match_str như bản cũ).
+        # flow_stats
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS flow_stats (
                 id               BIGSERIAL PRIMARY KEY,
@@ -127,8 +119,7 @@ async def init_db():
                 ON flow_stats USING GIN (match)
         """)
 
-        # ── anomalies ─────────────────────────────────────────────────────────
-        # Bỏ cột details (không bao giờ được populate).
+        # anomalies
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS anomalies (
                 id        BIGSERIAL PRIMARY KEY,
@@ -151,7 +142,7 @@ async def init_db():
                 ON anomalies(dpid, port_no, timestamp DESC)
         """)
 
-        # ── recommendations ───────────────────────────────────────────────────
+        # recommendations
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS recommendations (
                 id            BIGSERIAL PRIMARY KEY,
@@ -161,7 +152,6 @@ async def init_db():
                 level         alert_level NOT NULL,
                 action_type   action_type_enum NOT NULL,
                 message       TEXT NOT NULL,
-                root_cause    TEXT NOT NULL DEFAULT '',
                 actions_json  JSONB NOT NULL DEFAULT '[]'::jsonb,
                 status        status_enum NOT NULL DEFAULT 'pending',
                 chosen_action TEXT,
@@ -185,101 +175,38 @@ async def init_db():
                 ON recommendations USING GIN (actions_json)
         """)
 
-        # Add reason column if not exists (backward compatibility)
+        # latency_stats
         await conn.execute("""
-            ALTER TABLE recommendations
-            ADD COLUMN IF NOT EXISTS reason TEXT DEFAULT NULL
-        """)
-
-        # ── closed-loop tables ────────────────────────────────────────────────
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS control_cycles (
-                id              BIGSERIAL PRIMARY KEY,
-                started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                ended_at        TIMESTAMPTZ,
-                status          TEXT NOT NULL DEFAULT 'running',
-                congested_links INTEGER NOT NULL DEFAULT 0,
-                anomalies       INTEGER NOT NULL DEFAULT 0,
-                actions_planned INTEGER NOT NULL DEFAULT 0,
-                actions_applied INTEGER NOT NULL DEFAULT 0,
-                metadata        JSONB NOT NULL DEFAULT '{}'::jsonb
+            CREATE TABLE IF NOT EXISTS latency_stats (
+                id               BIGSERIAL PRIMARY KEY,
+                timestamp        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                src_ip           TEXT NOT NULL,
+                dst_ip           TEXT NOT NULL,
+                rtt_min_ms       DOUBLE PRECISION,
+                rtt_avg_ms       DOUBLE PRECISION,
+                rtt_max_ms       DOUBLE PRECISION,
+                packet_loss_pct  DOUBLE PRECISION NOT NULL DEFAULT 0,
+                probe_count      INTEGER NOT NULL DEFAULT 3
             )
         """)
         await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_control_cycles_started
-                ON control_cycles(started_at DESC)
+            CREATE INDEX IF NOT EXISTS idx_latency_time
+                ON latency_stats(timestamp DESC)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_latency_src_dst
+                ON latency_stats(src_ip, dst_ip, timestamp DESC)
         """)
 
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS control_actions (
-                id                   BIGSERIAL PRIMARY KEY,
-                cycle_id             BIGINT REFERENCES control_cycles(id) ON DELETE SET NULL,
-                dpid                 BIGINT NOT NULL,
-                port_no              INTEGER NOT NULL,
-                strategy             TEXT NOT NULL DEFAULT '',
-                action_type          TEXT NOT NULL,
-                action_param         DOUBLE PRECISION NOT NULL DEFAULT 0,
-                confidence           DOUBLE PRECISION NOT NULL DEFAULT 0,
-                score                DOUBLE PRECISION,
-                decision             TEXT NOT NULL DEFAULT 'pending',
-                execution_ok         BOOLEAN NOT NULL DEFAULT FALSE,
-                verification_ok      BOOLEAN NOT NULL DEFAULT FALSE,
-                rollback_performed   BOOLEAN NOT NULL DEFAULT FALSE,
-                execution_message    TEXT NOT NULL DEFAULT '',
-                verification_message TEXT NOT NULL DEFAULT '',
-                rollback_message     TEXT,
-                before_kpi           JSONB NOT NULL DEFAULT '{}'::jsonb,
-                after_kpi            JSONB,
-                metadata             JSONB NOT NULL DEFAULT '{}'::jsonb,
-                created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_control_actions_created
-                ON control_actions(created_at DESC)
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_control_actions_port
-                ON control_actions(dpid, port_no, created_at DESC)
-        """)
-
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS active_control_actions (
-                id                 BIGSERIAL PRIMARY KEY,
-                dpid               BIGINT NOT NULL,
-                port_no            INTEGER NOT NULL,
-                strategy           TEXT NOT NULL DEFAULT '',
-                action_type        TEXT NOT NULL,
-                action_param       DOUBLE PRECISION NOT NULL DEFAULT 0,
-                confidence         DOUBLE PRECISION NOT NULL DEFAULT 0,
-                state              TEXT NOT NULL DEFAULT 'active',
-                cooldown_until     TIMESTAMPTZ,
-                evaluate_after     TIMESTAMPTZ,
-                stable_cycles      INTEGER NOT NULL DEFAULT 0,
-                baseline_kpi       JSONB NOT NULL DEFAULT '{}'::jsonb,
-                latest_kpi         JSONB,
-                metadata           JSONB NOT NULL DEFAULT '{}'::jsonb,
-                control_action_id  BIGINT REFERENCES control_actions(id) ON DELETE SET NULL,
-                created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE (dpid, port_no)
-            )
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_active_control_state
-                ON active_control_actions(state, evaluate_after)
-        """)
-
-        # ── Cleanup function ──────────────────────────────────────────────────
+        # Cleanup function
         await conn.execute("""
             CREATE OR REPLACE FUNCTION cleanup_old_data(days INT)
             RETURNS VOID AS $$
             BEGIN
-                DELETE FROM port_stats  WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
-                DELETE FROM flow_stats  WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
-                DELETE FROM anomalies   WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
-                DELETE FROM control_cycles WHERE started_at < NOW() - (days || ' days')::INTERVAL;
+                DELETE FROM port_stats    WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
+                DELETE FROM flow_stats    WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
+                DELETE FROM anomalies     WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
+                DELETE FROM latency_stats WHERE timestamp < NOW() - (days || ' days')::INTERVAL;
             END;
             $$ LANGUAGE plpgsql;
         """)

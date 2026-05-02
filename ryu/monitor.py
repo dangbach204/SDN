@@ -339,5 +339,3 @@ class TrafficMonitor(app_manager.RyuApp):
                 "level":     level,
                 "message":   msg,
             })
-
-        # history đã được update trong port_stats_reply_handler
